@@ -39,7 +39,7 @@ class PyMuPDFParser(BaseParser):
         return match.group(2) if match else ''
 
     @exception_handler(default_return=None)
-    def parse_pdf(self, pdf_path: str) -> tuple[str, dict[str, str]] | None:
+    def parse_pdf(self, pdf_path: str) -> tuple[str, dict[str, Any]] | None:
         """Parse a PDF file.
 
         Parameters
@@ -54,64 +54,60 @@ class PyMuPDFParser(BaseParser):
             extracted from the PDF. If parsing fails, return None.
         """
         # open pdf
-        doc = pymupdf.open(pdf_path)
+        with pymupdf.open(pdf_path) as doc:
+            # Scrape text
+            text_list = []
+            # track char page indices
+            cumm_idx = 0
+            page_indices = [0]
 
-        # Scrape text
-        text_list = []
-        # track char page indices
-        cumm_idx = 0
-        page_indices = [0]
+            # loop pages
+            for page in doc:
+                # - page's text
+                page_txt = page.get_text()
+                text_list.append(page_txt)
+                # - char indices
+                cumm_idx += len(page_txt) + len('\n')
+                page_indices.append(cumm_idx)
 
-        # loop pages
-        for page in doc:
-            # - page's text
-            page_txt = page.get_text()
-            text_list.append(page_txt)
-            # - char indices
-            cumm_idx += len(page_txt) + len('\n')
-            page_indices.append(cumm_idx)
+            # remove trailing index
+            page_indices = page_indices[:-1]
 
-        # remove trailing index
-        page_indices = page_indices[:-1]
+            full_text = '\n'.join(text_list)
 
-        full_text = '\n'.join(text_list)
+            # Get first page (as a proxy for `abstract`)
+            first_page_text = text_list[0] if len(text_list) > 0 else ''
 
-        # Get first page (as a proxy for `abstract`)
-        first_page_text = text_list[0] if len(text_list) > 0 else ''
+            # Metadata (available to PyMuPDF)
+            title = doc.metadata.get('title', '')
+            authors = doc.metadata.get('author', '')
+            creationdate = doc.metadata.get('creationDate', '')
+            keywords = doc.metadata.get('keywords', '')
+            doi = self.extract_doi_info(doc.metadata.get('subject', ''))
+            prod = doc.metadata.get('producer', '')
+            form = doc.metadata.get('format', '')
+            abstract = (
+                doc.metadata.get('subject', '')
+                if len(doc.metadata.get('subject', '')) > self.abstract_threshold
+                else ''
+            )
 
-        # Metadata (available to PyMuPDF)
-        title = doc.metadata.get('title', '')
-        authors = doc.metadata.get('author', '')
-        createdate = doc.metadata.get('creationDate', '')
-        keywords = doc.metadata.get('keywords', '')
-        doi = self.extract_doi_info(doc.metadata.get('subject', ''))
-        prod = doc.metadata.get('producer', '')
-        form = doc.metadata.get('format', '')
-        abstract = (
-            doc.metadata.get('subject', '')
-            if len(doc.metadata.get('subject', '')) > self.abstract_threshold
-            else ''
-        )
+            # Assemble the metadata
+            out_meta = {
+                'title': title,
+                'authors': authors,
+                'creationdate': creationdate,
+                'keywords': keywords,
+                'doi': doi,
+                'producer': prod,
+                'format': form,
+                'first_page': first_page_text,
+                'abstract': abstract,
+                'page_char_idx': page_indices,
+            }
 
-        # Assemble the metadata
-        out_meta = {
-            'title': title,
-            'authors': authors,
-            'creationdate': createdate,
-            'keywords': keywords,
-            'doi': doi,
-            'producer': prod,
-            'format': form,
-            'first_page': first_page_text,
-            'abstract': abstract,
-            'page_char_idx': page_indices,
-        }
-
-        # explicitely close doc
-        doc.close()
-
-        # full text & metadata entries
-        return full_text, out_meta
+            # full text & metadata entries
+            return full_text, out_meta
 
     @exception_handler(default_return=None)
     def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:

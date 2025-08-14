@@ -16,6 +16,8 @@ from adaparse.parsers.base import BaseParserConfig
 from adaparse.utils import exception_handler
 from adaparse.utils import setup_logging
 
+from device_utils import build_doc_and_indices
+
 __all__ = [
     'NougatParser',
     'NougatParserConfig',
@@ -84,17 +86,24 @@ class NougatParser(BaseParser):
         """Initialize the marker parser."""
         import torch
         from nougat import NougatModel
-        from nougat.utils.device import move_to_device
+        #from nougat.utils.device import move_to_device # legacy
+        from device_utils import move_to_custom_device
 
         self.config = config
         self.model = NougatModel.from_pretrained(config.checkpoint)
         self.model.eval()
-        self.model = torch.compile(self.model, fullgraph=True)
-        self.model = move_to_device(
+        #self.model = torch.compile(self.model, fullgraph=True) # legacy
+        # move model
+        self.model = move_to_custom_device(
             self.model,
             bf16=not self.config.full_precision,
-            cuda=self.config.batchsize > 0,
         )
+        # compile model
+        try:
+            self.model = torch.compile(self.model, fullgraph=True)
+        except Exception:
+            # fall back silently; compilation is optional
+            pass
         self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
         # Log the output data information
@@ -172,15 +181,20 @@ class NougatParser(BaseParser):
         if len(datasets) == 0:
             return None
 
-        dataloader = DataLoader(
-            ConcatDataset(datasets),
+        # dataloader arguments
+        dl_kwargs = dict(
             batch_size=self.config.batchsize,
             pin_memory=True,
             num_workers=self.config.num_workers,
-            prefetch_factor=self.config.prefetch_factor,
             shuffle=False,
             collate_fn=LazyDataset.ignore_none_collate,
         )
+        if self.config.num_workers > 0:
+            dl_kwargs["prefetch_factor"] = self.config.prefetch_factor
+
+        # dataloader
+        dataloader = DataLoader(ConcatDataset(datasets), **dl_kwargs)
+
         documents = []
         predictions = []
         file_index = 0
@@ -246,13 +260,16 @@ class NougatParser(BaseParser):
                         output = markdown_compatible(output)  # noqa: PLW2901
                     predictions.append(output)
                 if is_last_page[j]:
-                    out = ''.join(predictions).strip()
-                    out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                    # NEW
+                    out, page_indices = build_doc_and_indices(predictions)
 
-                    # derive (approximate) page start character indices
-                    page_indices = [0] + [
-                        len(pred) for pred in predictions[:-1]
-                    ]
+                    # LEGACY
+                    # out = ''.join(predictions).strip()
+                    # out = re.sub(r'\n{3,}', '\n\n', out).strip()
+                    # - derive (approximate) page start character indices
+                    #page_indices = [0] + [
+                    #    len(pred) for pred in predictions[:-1]
+                    #]
 
                     # metadata
                     metadata = {'page_char_idx': page_indices}

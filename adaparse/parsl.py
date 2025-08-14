@@ -14,6 +14,7 @@ from typing import Sequence
 from typing import Union
 
 from parsl.addresses import address_by_interface
+from parsl.addresses import address_by_hostname
 from parsl.config import Config
 from parsl.executors import HighThroughputExecutor
 from parsl.launchers import MpiExecLauncher
@@ -26,7 +27,6 @@ from parsl.utils import get_all_checkpoints
 
 from adaparse.utils import BaseModel
 from adaparse.utils import PathLike
-
 
 class BaseComputeSettings(BaseModel, ABC):
     """Compute settings (HPC platform, number of GPUs, etc)."""
@@ -57,7 +57,7 @@ class LocalSettings(BaseComputeSettings):
     name: Literal['local'] = 'local'  # type: ignore[assignment]
     max_workers: int = 1
     cores_per_worker: float = 0.0001
-    worker_port_range: tuple[int, int] = (10000, 20000)
+    #worker_port_range: tuple[int, int] = (10000, 20000) # legacy
     label: str = 'htex'
 
     def get_config(self, run_dir: PathLike) -> Config:
@@ -67,11 +67,12 @@ class LocalSettings(BaseComputeSettings):
             strategy=None,
             executors=[
                 HighThroughputExecutor(
-                    address='127.0.0.1',
+                    address=address_by_hostname(),
+                    #address='127.0.0.1',
                     label=self.label,
                     max_workers_per_node=self.max_workers,
                     cores_per_worker=self.cores_per_worker,
-                    worker_port_range=self.worker_port_range,
+                    #worker_port_range=self.worker_port_range, # legacy
                     provider=LocalProvider(init_blocks=1, max_blocks=1),
                 ),
             ],
@@ -85,8 +86,8 @@ class WorkstationSettings(BaseComputeSettings):
     """Name of the platform."""
     available_accelerators: Union[int, Sequence[str]] = 8  # noqa: UP007
     """Number of GPU accelerators to use."""
-    worker_port_range: tuple[int, int] = (10000, 20000)
-    """Port range."""
+    #worker_port_range: tuple[int, int] = (10000, 20000)
+    #"""Port range."""
     retries: int = 1
     label: str = 'htex'
 
@@ -97,11 +98,10 @@ class WorkstationSettings(BaseComputeSettings):
             retries=self.retries,
             executors=[
                 HighThroughputExecutor(
-                    address='127.0.0.1',
+                    address=address_by_hostname(),
                     label=self.label,
                     cpu_affinity='block',
                     available_accelerators=self.available_accelerators,
-                    worker_port_range=self.worker_port_range,
                     provider=LocalProvider(init_blocks=1, max_blocks=1),
                 ),
             ],
@@ -248,7 +248,8 @@ class PolarisSettings(BaseComputeSettings):
                     prefetch_capacity=0,
                     provider=PBSProProvider(
                         launcher=MpiExecLauncher(
-                            bind_cmd='--cpu-bind',
+                            bind_cmd=None,
+                            #bind_cmd='--cpu-bind', # legacy
                             overrides='--depth=64 --ppn 1',
                         ),
                         account=self.account,
@@ -278,6 +279,82 @@ class PolarisSettings(BaseComputeSettings):
 
         return config
 
+class AuroraSettings(BaseComputeSettings):
+    """Aurora@ALCF configuration.
+
+    See here for details: https://docs.alcf.anl.gov/aurora/workflows/parsl/
+    """
+
+    name: Literal['aurora'] = 'aurora'  # type: ignore[assignment]
+    label: str = 'htex'
+
+    num_nodes: int = 1
+    """Number of nodes to request"""
+    worker_init: str = ''
+    """Command run before starting a worker. Should load modules and envs."""
+    scheduler_options: str = '#PBS -l filesystems=home:flare'
+    """PBS directives, pass -J for array jobs."""
+    account: str
+    """The account to charge compute to."""
+    queue: str
+    """Which queue to submit jobs to, will usually be prod."""
+    walltime: str
+    """Maximum job time."""
+    cpus_per_node: int = 204
+    """Up to 204 virtual cores via multithreading."""
+    cores_per_worker: float = 17
+    """Number of cores per worker. Evenly distr. among GPUs; leaves 4 idle."""
+    available_accelerators: int = 12
+    """Number of GPU to use."""
+    retries: int = 0
+    """Number of retries upon failure."""
+    worker_debug: bool = False
+    """Enable worker debug."""
+    monitoring_settings: MonitoringSettings | None = None
+    """Optional monitoring settings, if not provided, skip monitoring."""
+
+    def get_config(self, run_dir: str | PathLike) -> Config:
+        """Create a parsl configuration for running on Aurora@ALCF.
+
+        We will launch 4 workers per node, each pinned to a different GPU.
+
+        Parameters
+        ----------
+        run_dir: PathLike
+            Directory in which to store Parsl run files.
+        """
+        # legacy
+        #tile_names = [f'{gid}.{tid}' for gid in range(6) for tid in range(2)]
+
+        return Config(
+            executors=[
+                HighThroughputExecutor(
+                    label=self.label,
+                    worker_debug=self.worker_debug,
+                    # Distributes threads to workers/tiles in a way optimized for Aurora
+                    cpu_affinity="list:1-8,105-112:9-16,113-120:17-24,121-128:25-32,129-136:33-40,137-144:41-48,145-152:53-60,157-164:61-68,165-172:69-76,173-180:77-84,181-188:85-92,189-196:93-100,197-204",
+                    # Simplified configuration to avoid API compatibility issues
+                    available_accelerators=self.available_accelerators,
+                    cores_per_worker=self.cores_per_worker,
+                    provider=PBSProProvider(
+                        account=self.account,
+                        queue=self.queue,
+                        worker_init=self.worker_init,
+                        walltime=self.walltime,
+                        scheduler_options=self.scheduler_options,
+                        launcher=NoBindMpiExecLauncher(),
+                        select_options='',
+                        nodes_per_block=self.num_nodes,
+                        min_blocks=0,
+                        max_blocks=1,
+                        cpus_per_node=self.cpus_per_node,
+                    ),
+                ),
+            ],
+            retries=self.retries,
+            run_dir=str(run_dir),
+            app_cache=True,
+        )
 
 class MonitoringSettings(BaseModel):
     """Monitoring settings."""
@@ -298,6 +375,37 @@ class MonitoringSettings(BaseModel):
 ComputeSettingsTypes = Union[
     LocalSettings,
     WorkstationSettings,
-    PolarisSettings,
     LeonardoSettings,
+    PolarisSettings,
+    AuroraSettings
 ]
+
+class NoBindMpiExecLauncher(MpiExecLauncher):
+    """
+    Custom ``mpiexec`` launcher for Aurora that *never* adds bind options.
+    """
+
+    def __init__(self, overrides: str = "-ppn 1") -> None:  # noqa: D401, ANN001
+        # Call parent with empty bind_cmd (disables ``--bind-to``)
+        super().__init__(bind_cmd="", overrides=overrides)
+
+    # pylint: disable=arguments-differ
+    def __call__(self, command, tasks_per_node, nodes_per_block):  # type: ignore[override]
+        """Return an mpiexec command string with binding flags removed."""
+        raw = super().__call__(command, tasks_per_node, nodes_per_block)
+        # The parent might still insert a stray "none" token where the binding
+        # target would have been.  Remove any occurrence of that pattern.
+        cleaned = (
+            raw.replace("--bind-to none", "")
+                .replace(" none -", " -")
+                .replace(" none ", " ")
+        )
+        # Replace bare script with module invocation for robustness
+        cleaned = cleaned.replace(
+            "process_worker_pool.py",
+            "$(which python) -m parsl.executors.high_throughput.process_worker_pool",
+        )
+        # Collapse any multiple spaces left after removal
+        while "  " in cleaned:
+            cleaned = cleaned.replace("  ", " ")
+        return cleaned.strip()

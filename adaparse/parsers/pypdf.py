@@ -27,13 +27,12 @@ class PyPDFParserConfig(BaseParserConfig):
 
 
 class PyPDFParser(BaseParser):
-    """Warmstart interface for the PyPDF PDF parser.
-
-    No warmsart eneded as PyPDF is a Python library using CPUs only
+    """
+    No warmstart needed as PyPDF is a CPU-only library
     """
 
     def __init__(self, config: PyPDFParserConfig) -> None:
-        """Initialize the marker parser."""
+        """Initialize the pypdf parser."""
         self.config = config
         self.abstract_threshold = 580
 
@@ -60,71 +59,68 @@ class PyPDFParser(BaseParser):
             A tuple containing the full text of the PDF and the metadata
             extracted from the PDF. If parsing fails, return None.
         """
-        # TODO: This needs to be closed
+
         # Open
-        reader = PdfReader(pdf_path)
+        with open(pdf_path, "rb") as fh:
+            reader = PdfReader(fh)
 
-        # Scrape text
-        full_text = ''
+            # Scrape text
+            full_text = ''
 
-        # - page char indices
-        cumm_idx = 0
-        page_indices = [0]
+            # - page char indices
+            cumm_idx = 0
+            page_indices = [0]
 
-        # loop pages
-        for page in reader.pages:
-            page_txt = page.extract_text(extraction_mode='layout')
-            full_text += page_txt
-            # - char indices
-            cumm_idx += len(page_txt)
-            page_indices.append(cumm_idx)
+            # loop pages
+            for page in reader.pages:
+                page_txt = page.extract_text() or ""
+                full_text += page_txt
+                # - char indices
+                cumm_idx += len(page_txt)
+                page_indices.append(cumm_idx)
 
-        # remove trailing index
-        page_indices = page_indices[:-1]
+            # remove trailing index
+            page_indices = page_indices[:-1]
 
-        # 1st page
-        first_page_text = (
-            reader.pages[0].extract_text(extraction_mode='layout')
-            if len(reader.pages[0]) > 0
-            else ''
-        )
-        meta = reader.metadata
+            # 1st page
+            first_page_text = reader.pages[0].extract_text() or "" if len(reader.pages) > 0 else ""
+            meta = reader.metadata
 
-        # Metadata (available to pypdf)
-        title = meta.get('/Title', '')
-        authors = meta.get('/Author', '')
-        createdate = meta.get('/CreationDate', '')
-        keywords = meta.get('/Keywords', '')
-        # Use .get() to handle the missing DOI key
-        doi = (
-            meta.get('/doi', '')
-            if meta.get('/doi', '') != ''
-            else self.extract_doi_info(meta.get('/Subject', ''))
-        )
-        prod = meta.get('/Producer', '')
-        # Not included for pypdf, so we set it directly
-        form = meta.get('/Format', '')
-        abstract = (
-            meta.get('/Subject', '')
-            if len(meta.get('/Subject', '')) > self.abstract_threshold
-            else ''
-        )
+            # Metadata (available to pypdf)
+            title = meta.get('/Title', '')
+            authors = meta.get('/Author', '')
+            creationdate = meta.get('/CreationDate', '')
+            keywords = meta.get('/Keywords', '')
+            # Use .get() to handle the missing DOI key
+            doi = (
+                meta.get('/doi', '')
+                if meta.get('/doi', '') != ''
+                else self.extract_doi_info(meta.get('/Subject', ''))
+            )
+            prod = meta.get('/Producer', '')
+            # Not included for pypdf, so we set it directly
+            form = meta.get('/Format', '')
+            abstract = (
+                meta.get('/Subject', '')
+                if len(meta.get('/Subject', '')) > self.abstract_threshold
+                else ''
+            )
 
-        # Assemble the metadata
-        out_meta = {
-            'title': title,
-            'authors': authors,
-            'createdate': createdate,
-            'keywords': keywords,
-            'doi': doi,
-            'producer': prod,
-            'format': form,
-            'first_page': first_page_text,
-            'abstract': abstract,
-            'page_char_idx': page_indices,
-        }
+            # Assemble the metadata
+            out_meta = {
+                'title': title,
+                'authors': authors,
+                'creationdate': creationdate,
+                'keywords': keywords,
+                'doi': doi,
+                'producer': prod,
+                'format': form,
+                'first_page': first_page_text,
+                'abstract': abstract,
+                'page_char_idx': page_indices,
+            }
 
-        return full_text, out_meta
+            return full_text, out_meta
 
     @exception_handler(default_return=None)
     def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:

@@ -1,4 +1,4 @@
-"""Balance output jsonl files from a workflow run (pdfwf)"""
+"""Balance output jsonl files from a workflow run (AdaParse)"""
 
 from __future__ import annotations
 

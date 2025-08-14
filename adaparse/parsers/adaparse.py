@@ -25,6 +25,8 @@ from adaparse.parsers.pymupdf import PyMuPDFParserConfig
 from adaparse.timer import Timer
 from adaparse.utils import exception_handler
 
+from device_utils import move_to_device_accelerator
+
 __all__ = [
     'AdaParse',
     'AdaParseConfig',
@@ -32,7 +34,7 @@ __all__ = [
 
 
 class TextDataset(Dataset):
-    """Dataset for sequence classification."""
+    """Dataset for sequence regression via cls."""
 
     def __init__(self, texts: list[str]) -> None:
         """Initialize the dataset."""
@@ -47,8 +49,8 @@ class TextDataset(Dataset):
         return self.texts[idx]
 
 
-class TextClassifierConfig(BaseModel):
-    """Settings for the text classifier."""
+class TextRegressionConfig(BaseModel):
+    """Settings for the text quality regression."""
 
     alpha: float = Field(
         description='Max. proportion of high-quality parser.',
@@ -58,7 +60,7 @@ class TextClassifierConfig(BaseModel):
     )
     batch_size: int = Field(
         default=8,
-        description='The batch size for the classifier.',
+        description='The batch size for the regression model.',
     )
     max_character_length: int = Field(
         default=3200,
@@ -66,19 +68,19 @@ class TextClassifierConfig(BaseModel):
     )
     num_data_workers: int = Field(
         default=1,
-        description='The number of data workers for the classifier.',
+        description='The number of data workers for the regression.',
     )
     pin_memory: bool = Field(
         default=True,
-        description='Whether to pin memory for the classifier.',
+        description='Whether to pin memory for the regression model.',
     )
 
 
-class TextClassifier(ABC):
-    """Text classifier."""
+class TextRegression(ABC):
+    """Text Quality Regession Model."""
 
-    def __init__(self, config: TextClassifierConfig) -> None:
-        """Initialize the classifier."""
+    def __init__(self, config: TextRegressionConfig) -> None:
+        """Initialize the regression model via CLS."""
         from transformers import AutoModelForSequenceClassification
         from transformers import AutoTokenizer
 
@@ -92,9 +94,8 @@ class TextClassifier(ABC):
             '7shoe/adaparse-scibert-uncased', num_labels=6
         )
 
-        # Move the model to the appropriate device
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model.to(device)
+        # model to device
+        model, device = move_to_device_accelerator(model)
 
         # Set the model to evaluation mode
         model.eval()
@@ -105,7 +106,7 @@ class TextClassifier(ABC):
         self.tokenizer = tokenizer
 
     @abstractmethod
-    def decision_function(self, logits: torch.Tensor) -> torch.Tensor:
+    def decision_function(self, logits: torch.Tensor, alpha: float) -> torch.Tensor:
         """Return the decision function.
 
         Parameters
@@ -122,17 +123,17 @@ class TextClassifier(ABC):
 
     @torch.no_grad()
     def predict(self, text: list[str]) -> list[int]:
-        """Classify the input text.
+        """Quality regression on the input text.
 
         Parameters
         ----------
         text : list[str]
-            The input text to classify.
+            The input text to regress.
 
         Returns
         -------
         list[int]
-            The predicted classes.
+            The predicted scores.
         """
         # Truncate the text
         _text = [t[: self.config.max_character_length] for t in text]
@@ -179,8 +180,8 @@ class TextClassifier(ABC):
         return predictions
 
 
-class NougatTextClassifier(TextClassifier):
-    """Text classifier for the Nougat parser."""
+class NougatTextRegression(TextRegression):
+    """Text regression for the Nougat parser."""
 
     def decision_function(
         self,
@@ -280,7 +281,7 @@ class NougatTextClassifier(TextClassifier):
 
 
 class AdaParseConfig(
-    PyMuPDFParserConfig, NougatParserConfig, TextClassifierConfig
+    PyMuPDFParserConfig, NougatParserConfig, TextRegressionConfig
 ):
     """Settings for the AdaParse parser."""
 
@@ -315,9 +316,9 @@ class AdaParseConfig(
         )
 
     @property
-    def classifier_config(self) -> TextClassifierConfig:
-        """Return the text classifier configuration."""
-        return TextClassifierConfig(
+    def regression_config(self) -> TextRegressionConfig:
+        """Return the text regression model configuration."""
+        return TextRegressionConfig(
             alpha=self.alpha,
             weights_path=self.weights_path,
             batch_size=self.batch_size,
@@ -333,29 +334,32 @@ class AdaParse(BaseParser):
     def __init__(self, config: AdaParseConfig) -> None:
         """Initialize the parser."""
         # Initialize the PyMuPDF and Nougat parsers
-        self.pymudf_parser = PyMuPDFParser(config=config.pymupdf_config)
+        self.pymupdf_parser = PyMuPDFParser(config=config.pymupdf_config)
         self.nougat_parser = NougatParser(config=config.nougat_config)
 
         # Initialize the quality check classifier
         # Return a 0 or 1 for each parsed text. If 0, the pdf text, as parsed
         # by pymupdf is of high quality. If not 0, the pdf text should be
         # parsed with Nougat.
-        self.classifier = NougatTextClassifier(config=config.classifier_config)
+        self.classifier = NougatTextRegression(config=config.regression_config)
 
     @exception_handler(default_return=None)
     def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:
         """Parse a list of pdf files and return the parsed data."""
         # First, parse the PDFs using PyMuPDF
         with Timer('adaparse-pymupdf-parsing', self.unique_id):
-            documents = self.pymudf_parser.parse(pdf_files)
+            documents = self.pymupdf_parser.parse(pdf_files)
 
         # If no documents, there was an error parsing the PDFs with PyMuPDF
         if documents is None:
             return None
 
+        # shallow copy
+        docs_before_filter = list(documents)
+
         # Apply the quality check regressor
         with Timer('adaparse-quality-check', self.unique_id):
-            document_text = [d['text'] for d in documents]
+            document_text = [d['text'] for d in docs_before_filter]
             qualities = self.classifier.predict(document_text)
 
             # DEBUG
@@ -363,19 +367,23 @@ class AdaParse(BaseParser):
 
         # Log the percentage of low-quality documents
         low_quality_num = sum(q != 0 for q in qualities)
-        low_quality_percentage = (
-            1.0 * low_quality_num / len(qualities)
-        ) * 100.0
+        low_quality_percentage = (low_quality_num / max(1, len(qualities))) * 100.0
         print(f'Low-quality documents: {low_quality_percentage:.2f}%')
 
+        # LEGACY
         # Collect the documents that passed the quality check
-        documents = [d for d, q in zip(documents, qualities) if q == 0]
+        # documents = [d for d, q in zip(documents, qualities) if q == 0]
 
         # Collect the pdf files that failed the quality check
-        low_quality_pdfs = [p for p, q in zip(pdf_files, qualities) if q != 0]
+        # LEGACY
+        #low_quality_pdfs = [p for p, q in zip(pdf_files, qualities) if q != 0]
+        # NEW (ensures alignment)
+        low_quality_pdfs = [d["path"] for d, q in zip(docs_before_filter, qualities) if q != 0]
+        documents = [d for d, q in zip(docs_before_filter, qualities) if q == 0]
 
         # If no low-quality documents, return the parsed documents
         if not low_quality_pdfs:
+            documents = [d for d, q in zip(docs_before_filter, qualities) if q == 0]
             return documents
 
         # Parse the low-quality documents using the Nougat parser

@@ -22,7 +22,8 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = [
-    "parsl>=2024.2.5",
+    "parsl==2025.3.10",
+    "torch==2.4.1",
     "pydantic>=2.6.1",
     "typer[all]>=0.7.0",
     "transformers==4.38.2",

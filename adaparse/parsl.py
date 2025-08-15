@@ -239,17 +239,14 @@ class PolarisSettings(BaseComputeSettings):
                     heartbeat_period=15,
                     heartbeat_threshold=120,
                     worker_debug=self.worker_debug,
-                    # available_accelerators will override settings
-                    # for max_workers
                     available_accelerators=self.available_accelerators,
                     cores_per_worker=self.cores_per_worker,
-                    # address=address_by_interface('bond0'),
                     cpu_affinity='block-reverse',
                     prefetch_capacity=0,
                     provider=PBSProProvider(
                         launcher=MpiExecLauncher(
-                            bind_cmd="--cpu-bind",
-                            overrides="--depth=64 --ppn 1",
+                            bind_cmd='--cpu-bind',
+                            overrides='--depth=64 --ppn 1',
                         ),
                         account=self.account,
                         queue=self.queue,
@@ -271,7 +268,6 @@ class PolarisSettings(BaseComputeSettings):
             monitoring=monitoring,
             checkpoint_files=checkpoints,
             run_dir=run_dir,
-            checkpoint_mode='task_exit',
             retries=self.retries,
             app_cache=True,
         )

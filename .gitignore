@@ -127,3 +127,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# examples: ignore specific YAMLs (any depth under examples/)
+examples/**/*_rebuttal_*.yaml
+examples/**/*litqa*.yaml
+examples/**/*bioprotocols*
+examples/**/*Public*.yaml
+examples/**/*astro*.yaml
+examples/**/*clark*.yaml
+
+# ignore the entire multimodal directory
+multimodal/

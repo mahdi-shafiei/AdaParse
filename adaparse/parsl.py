@@ -248,9 +248,8 @@ class PolarisSettings(BaseComputeSettings):
                     prefetch_capacity=0,
                     provider=PBSProProvider(
                         launcher=MpiExecLauncher(
-                            bind_cmd=None,
-                            #bind_cmd='--cpu-bind', # legacy
-                            overrides='--depth=64 --ppn 1',
+                            bind_cmd="--cpu-bind",
+                            overrides="--depth=64 --ppn 1",
                         ),
                         account=self.account,
                         queue=self.queue,

@@ -16,7 +16,8 @@ from adaparse.parsers.base import BaseParserConfig
 from adaparse.utils import exception_handler
 from adaparse.utils import setup_logging
 
-from device_utils import build_doc_and_indices
+from adaparse.parsers.device_utils import build_doc_and_indices
+from adaparse.parsers.device_utils import move_to_custom_device
 
 __all__ = [
     'NougatParser',
@@ -87,7 +88,8 @@ class NougatParser(BaseParser):
         import torch
         from nougat import NougatModel
         #from nougat.utils.device import move_to_device # legacy
-        from device_utils import move_to_custom_device
+        #from adaparse.parsers.device_utils import move_to_custom_device
+
 
         self.config = config
         self.model = NougatModel.from_pretrained(config.checkpoint)

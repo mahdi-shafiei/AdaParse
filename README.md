@@ -19,6 +19,7 @@ supercomputer at Argonne National Laboratory (ANL). Regardless, AdaParse can run
 ### This work is presented a MLSys on May 13th, 2025; see you at Poster #3229 🥳
 
 # Installation
+## Polaris
 The steps below enable any of the parsers.
 ```bash
 # conda env (machine-speicifc)
@@ -33,6 +34,18 @@ pip install --upgrade pip setuptools wheel
 pip install -e .
 ```
 If you plan on using [Tesseract](https://github.com/tesseract-ocr/tesseract?tab=readme-ov-file#installing-tesseract), additional installation steps are required.
+
+## Aurora
+The steps below enable any of the parsers.
+```bash
+git clone git@github.com:7shoe/AdaParse.git
+cd AdaParse
+
+module load frameworks
+pip install --upgrade pip setuptools wheel
+pip install -e .
+export PATH="$HOME/.local/aurora/frameworks/2024.2.1_u1/bin:$PATH"
+```
 
 ## Usage
 The `adaparse` workflow can be run at scale using Parsl
@@ -117,7 +130,7 @@ Hence, a typical line in the JSONL file may look like this:
  "text": "Text of the 1st PDF.",
  "metadata" : {
     "title" : "Ising string beyond the Nambu-Goto action",
-    "authors" : "", 
+    "authors" : "",
     "format" : "PDF 1.4",
     "creationdate" : "",
     "keywords" : "",

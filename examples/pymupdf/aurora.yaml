@@ -19,7 +19,7 @@ compute_settings:
   # The number of compute nodes to use
   num_nodes: 1
   # Make sure to update the path to your conda environment and HF cache
-  worker_init: "source /home/siebenschuhAdaParse/scripts/standup_aurora.sh;HF_HOME=/lus/flare/projects/FoundEpidem/siebenschuh/HF"
+  worker_init: "source /home/siebenschuh/AdaParse/scripts/standup_aurora.sh"
   # The scheduler options to use when submitting jobs
   scheduler_options: "#PBS -l filesystems=home:flare"
   # Make sure to change the account to the account you want to charge

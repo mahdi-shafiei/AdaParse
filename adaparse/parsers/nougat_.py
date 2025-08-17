@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import re
 import time
+import numpy as np
 from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal
+from typing import List
+from PIL import Image, ImageOps
+from torchvision.transforms.functional import resize, rotate
+
+from nougat.transforms import train_transform, test_transform
 
 from pydantic import field_validator
 
@@ -18,12 +24,34 @@ from adaparse.utils import setup_logging
 
 from adaparse.parsers.device_utils import build_doc_and_indices
 from adaparse.parsers.device_utils import move_to_custom_device
+from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 
 __all__ = [
     'NougatParser',
     'NougatParserConfig',
 ]
 
+
+# NEW 1
+def _dl_worker_init(_):
+    # Ensure workers never create XPU/CUDA tensors (so they can be IPC-shared)
+    try:
+        import torch
+        torch.set_default_device("cpu")
+    except Exception:
+        pass
+
+# NEW 2
+def _move_to_device(obj, device, non_blocking=False):
+    import torch
+    if isinstance(obj, torch.Tensor):
+        return obj.to(device, non_blocking=non_blocking)
+    if isinstance(obj, dict):
+        return {k: _move_to_device(v, device, non_blocking) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        items = [_move_to_device(v, device, non_blocking) for v in obj]
+        return type(obj)(items)
+    return obj
 
 class NougatParserConfig(BaseParserConfig):
     """Settings for the marker PDF parser."""
@@ -132,6 +160,7 @@ class NougatParser(BaseParser):
         list[dict[str, Any]]
             The extracted documents.
         """
+        import torch
         from nougat.postprocessing import markdown_compatible
         from nougat.utils.dataset import LazyDataset
         from torch.utils.data import ConcatDataset
@@ -139,8 +168,20 @@ class NougatParser(BaseParser):
 
         pdfs = [Path(pdf_file) for pdf_file in pdf_files]
 
+        # HOUSEKEEPING
+        from adaparse.parsers.device_utils import resolve_device, move_to_custom_device
+        device_str = resolve_device()
+        device = torch.device(device_str)
+
         if self.config.batchsize <= 0:
             self.config.batchsize = 1
+
+        # extract formatting arguments
+        align_long_axis = bool(self.model.encoder.align_long_axis)
+        input_size = list(self.model.encoder.input_size)
+        random_padding = False
+        # - combine
+        prepared_arg_triplet = (align_long_axis, input_size, random_padding)
 
         datasets = []
         for pdf in pdfs:
@@ -155,6 +196,7 @@ class NougatParser(BaseParser):
                         ' Use --recompute config to override extraction.'
                     )
                     continue
+ 
             try:
                 # TODO: Using self.model.encoder.prepare_input causes the data
                 # loader processes to use GPU memory, since prepare_input is
@@ -165,12 +207,22 @@ class NougatParser(BaseParser):
                 # class methods and uses some class attributes. See here for
                 # more details:
                 # https://discuss.pytorch.org/t/distributeddataparallel-causes-dataloader-workers-to-utilize-gpu-memory/88731/5
+                #dataset = LazyDataset(
+                #    pdf,
+                #    partial(
+                #        self.model.encoder.prepare_input, random_padding=False
+                #    ),
+                #)
+                
+                # dataset
+                #PrepArgs (align_long_axis: bool, input_size: list[int], random_padding: bool) set before loop
                 dataset = LazyDataset(
                     pdf,
                     partial(
-                        self.model.encoder.prepare_input, random_padding=False
+                        prepare_input_sc, prep_args=prepared_arg_triplet
                     ),
                 )
+                
 
             # PdfStreamError, ValueError, KeyError, pypdf.errors.PdfReadError,
             # and potentially other exceptions can be raised here.

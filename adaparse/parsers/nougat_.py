@@ -2,29 +2,21 @@
 
 from __future__ import annotations
 
-import re
 import time
-import numpy as np
 from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal
-from typing import List
-from PIL import Image, ImageOps
-from torchvision.transforms.functional import resize, rotate
-
-from nougat.transforms import train_transform, test_transform
 
 from pydantic import field_validator
 
 from adaparse.parsers.base import BaseParser
 from adaparse.parsers.base import BaseParserConfig
-from adaparse.utils import exception_handler
-from adaparse.utils import setup_logging
-
 from adaparse.parsers.device_utils import build_doc_and_indices
 from adaparse.parsers.device_utils import move_to_custom_device
 from adaparse.parsers.nougat_inference_utils import prepare_input_sc
+from adaparse.utils import exception_handler
+from adaparse.utils import setup_logging
 
 __all__ = [
     'NougatParser',
@@ -37,13 +29,16 @@ def _dl_worker_init(_):
     # Ensure workers never create XPU/CUDA tensors (so they can be IPC-shared)
     try:
         import torch
-        torch.set_default_device("cpu")
+
+        torch.set_default_device('cpu')
     except Exception:
         pass
+
 
 # NEW 2
 def _move_to_device(obj, device, non_blocking=False):
     import torch
+
     if isinstance(obj, torch.Tensor):
         return obj.to(device, non_blocking=non_blocking)
     if isinstance(obj, dict):
@@ -52,6 +47,7 @@ def _move_to_device(obj, device, non_blocking=False):
         items = [_move_to_device(v, device, non_blocking) for v in obj]
         return type(obj)(items)
     return obj
+
 
 class NougatParserConfig(BaseParserConfig):
     """Settings for the marker PDF parser."""
@@ -115,14 +111,13 @@ class NougatParser(BaseParser):
         """Initialize the marker parser."""
         import torch
         from nougat import NougatModel
-        #from nougat.utils.device import move_to_device # legacy
-        #from adaparse.parsers.device_utils import move_to_custom_device
-
+        # from nougat.utils.device import move_to_device # legacy
+        # from adaparse.parsers.device_utils import move_to_custom_device
 
         self.config = config
         self.model = NougatModel.from_pretrained(config.checkpoint)
         self.model.eval()
-        #self.model = torch.compile(self.model, fullgraph=True) # legacy
+        # self.model = torch.compile(self.model, fullgraph=True) # legacy
         # move model
         self.model = move_to_custom_device(
             self.model,
@@ -138,13 +133,9 @@ class NougatParser(BaseParser):
 
         # Log the output data information
         if self.config.mmd_out is not None:
-            self.logger.info(
-                f'Writing markdown files to {self.config.mmd_out}'
-            )
+            self.logger.info(f'Writing markdown files to {self.config.mmd_out}')
         else:
-            self.logger.info(
-                '`mmd_out` not specified, will not write markdown files.'
-            )
+            self.logger.info('`mmd_out` not specified, will not write markdown files.')
 
     @exception_handler(default_return=None)
     def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:  # noqa: PLR0912, PLR0915
@@ -169,7 +160,8 @@ class NougatParser(BaseParser):
         pdfs = [Path(pdf_file) for pdf_file in pdf_files]
 
         # HOUSEKEEPING
-        from adaparse.parsers.device_utils import resolve_device, move_to_custom_device
+        from adaparse.parsers.device_utils import resolve_device
+
         device_str = resolve_device()
         device = torch.device(device_str)
 
@@ -196,7 +188,7 @@ class NougatParser(BaseParser):
                         ' Use --recompute config to override extraction.'
                     )
                     continue
- 
+
             try:
                 # TODO: Using self.model.encoder.prepare_input causes the data
                 # loader processes to use GPU memory, since prepare_input is
@@ -207,22 +199,19 @@ class NougatParser(BaseParser):
                 # class methods and uses some class attributes. See here for
                 # more details:
                 # https://discuss.pytorch.org/t/distributeddataparallel-causes-dataloader-workers-to-utilize-gpu-memory/88731/5
-                #dataset = LazyDataset(
+                # dataset = LazyDataset(
                 #    pdf,
                 #    partial(
                 #        self.model.encoder.prepare_input, random_padding=False
                 #    ),
-                #)
-                
+                # )
+
                 # dataset
-                #PrepArgs (align_long_axis: bool, input_size: list[int], random_padding: bool) set before loop
+                # PrepArgs (align_long_axis: bool, input_size: list[int], random_padding: bool) set before loop
                 dataset = LazyDataset(
                     pdf,
-                    partial(
-                        prepare_input_sc, prep_args=prepared_arg_triplet
-                    ),
+                    partial(prepare_input_sc, prep_args=prepared_arg_triplet),
                 )
-                
 
             # PdfStreamError, ValueError, KeyError, pypdf.errors.PdfReadError,
             # and potentially other exceptions can be raised here.
@@ -244,7 +233,7 @@ class NougatParser(BaseParser):
             collate_fn=LazyDataset.ignore_none_collate,
         )
         if self.config.num_workers > 0:
-            dl_kwargs["prefetch_factor"] = self.config.prefetch_factor
+            dl_kwargs['prefetch_factor'] = self.config.prefetch_factor
 
         # dataloader
         dataloader = DataLoader(ConcatDataset(datasets), **dl_kwargs)
@@ -265,7 +254,7 @@ class NougatParser(BaseParser):
             model_outputs.append((model_output, is_last_page))
 
         self.logger.info(
-            f'First pass took {time.time()-start:.2f} seconds. '
+            f'First pass took {time.time() - start:.2f} seconds. '
             'Processing the model outputs.'
         )
         start = time.time()
@@ -285,29 +274,22 @@ class NougatParser(BaseParser):
                 page_num += 1
                 if output.strip() == '[MISSING_PAGE_POST]':
                     # uncaught repetitions -- most likely empty page
-                    predictions.append(
-                        f'\n\n[MISSING_PAGE_EMPTY:{page_num}]\n\n'
-                    )
-                elif (
-                    self.config.skipping
-                    and model_output['repeats'][j] is not None
-                ):
+                    predictions.append(f'\n\n[MISSING_PAGE_EMPTY:{page_num}]\n\n')
+                elif self.config.skipping and model_output['repeats'][j] is not None:
                     if model_output['repeats'][j] > 0:
                         # If we end up here, it means the output is most
                         # likely not complete and was truncated.
                         self.logger.warning(
                             f'Skipping page {page_num} due to repetitions.'
                         )
-                        predictions.append(
-                            f'\n\n[MISSING_PAGE_FAIL:{page_num}]\n\n'
-                        )
+                        predictions.append(f'\n\n[MISSING_PAGE_FAIL:{page_num}]\n\n')
                     else:
                         # If we end up here, it means the document page is too
                         # different from the training domain.
                         # This can happen e.g. for cover pages.
                         predictions.append(
                             f'\n\n[MISSING_PAGE_EMPTY:'
-                            f'{i * self.config.batchsize+j+1}]\n\n'
+                            f'{i * self.config.batchsize + j + 1}]\n\n'
                         )
                 else:
                     if self.config.markdown:
@@ -321,9 +303,9 @@ class NougatParser(BaseParser):
                     # out = ''.join(predictions).strip()
                     # out = re.sub(r'\n{3,}', '\n\n', out).strip()
                     # - derive (approximate) page start character indices
-                    #page_indices = [0] + [
+                    # page_indices = [0] + [
                     #    len(pred) for pred in predictions[:-1]
-                    #]
+                    # ]
 
                     # metadata
                     metadata = {'page_char_idx': page_indices}
@@ -352,7 +334,7 @@ class NougatParser(BaseParser):
                     file_index += 1
 
         self.logger.info(
-            f'Second pass took {time.time()-start:.2f} seconds. '
+            f'Second pass took {time.time() - start:.2f} seconds. '
             'Finished processing the model outputs.'
         )
 

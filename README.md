@@ -1,6 +1,6 @@
 # AdaParse
 <div align="center">
-  <img src="https://github.com/user-attachments/assets/e7e9e6c4-8d5b-4502-abae-cddcb1606f61" alt="image" width="70%">
+  <img src="./assets/adaparse_logo.png" alt="AdaParse logo" width="70%">
 </div>
 
 AdaParse (**Ada**ptive Parallel **P**DF Parsing **a**nd **R**esource **S**caling **E**ngine) enable scalable high-accuracy PDF parsing. AdaParse is a data-driven strategy that assigns an appropriate parser to each document; offering high accuracy for any computaional budget.

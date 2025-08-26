@@ -1,0 +1,12 @@
+# Command snippets used to initialize environments per machine.
+# The script will:
+#  - enable clean seperation between machine env (for worker_init) and parser config
+#  - substitute <ABS_PATH_TO_standup_aurora.sh> with ${REPO_ROOT}/scripts/standup_aurora.sh
+#  - expose the final string via <WORKER_INIT> in your templates
+
+aurora: "source <ABS_PATH_TO_standup_aurora.sh>"
+polaris: "module use /soft/modulefiles; module load conda/2024-04-29; conda activate adaparse"
+sophia:  "module use /soft/modulefiles; module load conda/2024-08-08; conda activate adaparse"
+lambda:  "conda activate adaparse"
+local:   "conda activate adaparse"
+

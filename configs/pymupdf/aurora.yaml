@@ -1,0 +1,33 @@
+# /examples/templates/aurora/canvas.yaml 
+
+# The directory containing the pdfs to convert
+pdf_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/input/small-pdf-dataset
+
+# The directory to place the converted pdfs in
+out_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/output/pymupdf
+
+# PDFs rather than zipped PDFs
+iszip: false
+
+# The settings for the pdf parser
+parser_settings:
+  # The name of the parser to use
+  name: pymupdf
+
+# The compute settings for the workflow
+compute_settings:
+  # The name of the compute platform to use
+  name: aurora
+  # The number of compute nodes to use
+  num_nodes: 1
+  # Make sure to update the path to your conda environment and HF cache
+  worker_init: "source <ABS_PATH_TO_standup_aurora.sh>"
+  # The scheduler options to use when submitting jobs
+  scheduler_options: "#PBS -l filesystems=home:flare"
+  # Make sure to change the account to the account you want to charge
+  account: FoundEpidem
+  # The HPC queue to submit to
+  queue: debug
+  # The amount of time to request for your job
+  walltime: 00:15:00
+

@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Jupyter notebook testing
+_notebooks/
+
 # Distribution / packaging
 .Python
 build/

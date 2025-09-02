@@ -8,47 +8,25 @@ from pathlib import Path
 from typing import Any
 from typing import Literal
 
+import pymupdf
+
 from pydantic import field_validator
 
 from adaparse.parsers.base import BaseParser
 from adaparse.parsers.base import BaseParserConfig
 from adaparse.parsers.device_utils import build_doc_and_indices
 from adaparse.parsers.device_utils import move_to_custom_device
+from adaparse.parsers.device_utils import resolve_device # new
 from adaparse.parsers.nougat_inference_utils import prepare_input_sc
+
 from adaparse.utils import exception_handler
 from adaparse.utils import setup_logging
+
 
 __all__ = [
     'NougatParser',
     'NougatParserConfig',
 ]
-
-
-# NEW 1
-def _dl_worker_init(_):
-    # Ensure workers never create XPU/CUDA tensors (so they can be IPC-shared)
-    try:
-        import torch
-
-        torch.set_default_device('cpu')
-    except Exception:
-        pass
-
-
-# NEW 2
-def _move_to_device(obj, device, non_blocking=False):
-    import torch
-
-    if isinstance(obj, torch.Tensor):
-        return obj.to(device, non_blocking=non_blocking)
-    if isinstance(obj, dict):
-        return {k: _move_to_device(v, device, non_blocking) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        items = [_move_to_device(v, device, non_blocking) for v in obj]
-        return type(obj)(items)
-    return obj
-
-
 class NougatParserConfig(BaseParserConfig):
     """Settings for the marker PDF parser."""
 
@@ -58,8 +36,7 @@ class NougatParserConfig(BaseParserConfig):
     batchsize: int = 10
     # The number of workers to use for dataloading.
     num_workers: int = 1
-    # The Number of batches loaded in advance by each worker. 2 means there
-    # will be a total of 2 * num_workers batches prefetched across all workers.
+    # The Number of batches loaded in advance by each worker
     prefetch_factor: int = 4
     # The path to the Nougat model checkpoint.
     checkpoint: Path
@@ -67,6 +44,8 @@ class NougatParserConfig(BaseParserConfig):
     mmd_out: Path | None = None
     # Override pre-existing parsed outputs.
     recompute: bool = False
+    # Fill-in of failed/empty pages via PyMuPDF (False implies pure Nougat)
+    fill_missing_pages: bool = False
     # Use float32 instead of bfloat32.
     full_precision: bool = False
     # Whether to format the output as markdown.
@@ -110,14 +89,13 @@ class NougatParser(BaseParser):
     def __init__(self, config: NougatParserConfig) -> None:
         """Initialize the marker parser."""
         import torch
-        from nougat import NougatModel
-        # from nougat.utils.device import move_to_device # legacy
-        # from adaparse.parsers.device_utils import move_to_custom_device
+        from nougat import NougatModel                  # nougat lib
+        # from nougat_parser.model import NougatModel   # own implementation
 
         self.config = config
         self.model = NougatModel.from_pretrained(config.checkpoint)
         self.model.eval()
-        # self.model = torch.compile(self.model, fullgraph=True) # legacy
+
         # move model
         self.model = move_to_custom_device(
             self.model,
@@ -128,7 +106,8 @@ class NougatParser(BaseParser):
             self.model = torch.compile(self.model, fullgraph=True)
         except Exception:
             # fall back silently; compilation is optional
-            pass
+            self.logger = setup_logging('[WARNING] Failed to compile model', config.nougat_logs_path)
+
         self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
         # Log the output data information
@@ -160,7 +139,7 @@ class NougatParser(BaseParser):
         pdfs = [Path(pdf_file) for pdf_file in pdf_files]
 
         # HOUSEKEEPING
-        from adaparse.parsers.device_utils import resolve_device
+        # from adaparse.parsers.device_utils import resolve_device # legacy
 
         device_str = resolve_device()
         device = torch.device(device_str)
@@ -190,24 +169,7 @@ class NougatParser(BaseParser):
                     continue
 
             try:
-                # TODO: Using self.model.encoder.prepare_input causes the data
-                # loader processes to use GPU memory, since prepare_input is
-                # a function tied to an nn.Module instance. This is a bug in
-                # the Nougat library, but we can work around it by creating
-                # a standalone prepare_input function. We leave this
-                # to future work since the prepare_input functions calls other
-                # class methods and uses some class attributes. See here for
-                # more details:
-                # https://discuss.pytorch.org/t/distributeddataparallel-causes-dataloader-workers-to-utilize-gpu-memory/88731/5
-                # dataset = LazyDataset(
-                #    pdf,
-                #    partial(
-                #        self.model.encoder.prepare_input, random_padding=False
-                #    ),
-                # )
-
                 # dataset
-                # PrepArgs (align_long_axis: bool, input_size: list[int], random_padding: bool) set before loop
                 dataset = LazyDataset(
                     pdf,
                     partial(prepare_input_sc, prep_args=prepared_arg_triplet),
@@ -246,6 +208,12 @@ class NougatParser(BaseParser):
 
         start = time.time()
 
+        # = = = = = = = = = = = = = = = = = = = = = = =
+        #
+        # = = = = = = = = = = = = = = = = = = = = = = =
+        self.logger.info(f"\nprint(len(dataloader)): {len(dataloader)}")
+        # = = = = = = = = = = = = = = = = = = = = = = =
+
         # First pass to get the model outputs
         for sample, is_last_page in dataloader:
             model_output = self.model.inference(
@@ -259,6 +227,11 @@ class NougatParser(BaseParser):
         )
         start = time.time()
 
+        # Load PyMuPDF
+        # = = = = = = = = = = = = = = = = = = = = = = =
+        #self.logger.info(f"\nprint(len(model_outputs)): {len(model_outputs)}")
+        # = = = = = = = = = = = = = = = = = = = = = = =
+
         # Second pass to process the model outputs
         for i, (model_output, is_last_page) in enumerate(model_outputs):
             # check if model output is faulty
@@ -271,41 +244,80 @@ class NougatParser(BaseParser):
                             datasets[file_index].size,
                         )
                     )
+
+                    # parser
+                    doc_parser_name = 'nougat'
+
+                    # open file : fill missing pages
+                    doc = None
+                    if self.config.fill_missing_pages:
+                        try:
+                            doc = pymupdf.open(datasets[file_index].name)
+                        except Exception:
+                            self.logger.warning("PyMuPDF open failed; falling back to Nougat only.")
+                            doc = None
+
                 page_num += 1
                 if output.strip() == '[MISSING_PAGE_POST]':
-                    # uncaught repetitions -- most likely empty page
-                    predictions.append(f'\n\n[MISSING_PAGE_EMPTY:{page_num}]\n\n')
+                    # uncaught repetitions -- potentially empty page
+                    if self.config.fill_missing_pages:
+                        if page_num < len(doc):
+                            filled_page_text = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
+                            doc_parser_name = 'nougat/pymupdf'
+                        else:
+                            filled_page_text = f'\n\n[MISSING_PAGE_EMPTY_FAILED_FILL:{page_num}]\n\n'
+                        self.logger.warning(
+                                    f'Fill empty page {page_num} via PyMuPDF as it is claimed EMPTY.'
+                            )
+                        predictions.append(filled_page_text)
+                    else:
+                        self.logger.warning(
+                                f'Skipping page {page_num} as it is claimed EMPTY.'
+                        )
+                        predictions.append(f'\n\n[MISSING_PAGE_EMPTY:{page_num}]\n\n')
                 elif self.config.skipping and model_output['repeats'][j] is not None:
                     if model_output['repeats'][j] > 0:
-                        # If we end up here, it means the output is most
-                        # likely not complete and was truncated.
-                        self.logger.warning(
-                            f'Skipping page {page_num} due to repetitions.'
-                        )
-                        predictions.append(f'\n\n[MISSING_PAGE_FAIL:{page_num}]\n\n')
+                        # Likely incomplete and truncated output
+                        if self.config.fill_missing_pages:
+                            if page_num < len(doc):
+                                filled_page_text = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
+                                doc_parser_name = 'nougat/pymupdf'
+                            else:
+                                filled_page_text = f'\n\n[MISSING_PAGE_FAIL_FAILED_FILL:{page_num}]\n\n'
+                            self.logger.warning(
+                                f'Filled page {page_num} via PyMuPDF due to repetitions.'
+                            )
+                            predictions.append(filled_page_text)
+                        else:
+                            self.logger.warning(
+                                f'Skipping page {page_num} due to repetitions.'
+                            )
+                            predictions.append(f'\n\n[MISSING_PAGE_FAIL:{page_num}]\n\n')
                     else:
-                        # If we end up here, it means the document page is too
-                        # different from the training domain.
-                        # This can happen e.g. for cover pages.
-                        predictions.append(
-                            f'\n\n[MISSING_PAGE_EMPTY:'
-                            f'{i * self.config.batchsize + j + 1}]\n\n'
-                        )
+                        # Nougat parsing failure ("FAIL")
+                        if self.config.fill_missing_pages:
+                            if page_num < len(doc):
+                                filled_page_text = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
+                                doc_parser_name = 'nougat/pymupdf'
+                            else:
+                                filled_page_text = f'\n\n[MISSING_PAGE_EMPTY_FAILED_FILL:{page_num}]\n\n'
+                            predictions.append(filled_page_text)
+                        else:
+                            predictions.append(
+                                f'\n\n[MISSING_PAGE_EMPTY:'
+                                f'{i * self.config.batchsize + j + 1}]\n\n'
+                            )
+
                 else:
                     if self.config.markdown:
                         output = markdown_compatible(output)  # noqa: PLW2901
                     predictions.append(output)
                 if is_last_page[j]:
-                    # NEW
                     out, page_indices = build_doc_and_indices(predictions)
 
-                    # LEGACY
-                    # out = ''.join(predictions).strip()
-                    # out = re.sub(r'\n{3,}', '\n\n', out).strip()
-                    # - derive (approximate) page start character indices
-                    # page_indices = [0] + [
-                    #    len(pred) for pred in predictions[:-1]
-                    # ]
+                    # close file : fill missing pages
+                    if self.config.fill_missing_pages and doc is not None:
+                        doc.close()
 
                     # metadata
                     metadata = {'page_char_idx': page_indices}
@@ -315,7 +327,7 @@ class NougatParser(BaseParser):
                         'path': str(is_last_page[j]),
                         'text': out,
                         'metadata': metadata,
-                        'parser': 'nougat',
+                        'parser': doc_parser_name,
                     }
                     documents.append(document)
 

@@ -15,8 +15,9 @@ set -euo pipefail
 #   ./download_nougat_checkpoint.sh ./checkpoint --force
 # ---------------------------------------------
 
+# default is `base` model
 BASE_URL="https://github.com/facebookresearch/nougat/releases/download"
-DEFAULT_MODEL_TAG="0.1.0-small"
+DEFAULT_MODEL_TAG="0.1.0-base"
 
 # human-readable disk usage
 human_size() {

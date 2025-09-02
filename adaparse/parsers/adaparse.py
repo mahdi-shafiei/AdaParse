@@ -308,6 +308,7 @@ class AdaParseConfig(
             checkpoint=self.checkpoint,
             mmd_out=self.mmd_out,
             recompute=self.recompute,
+            fill_missing_pages=self.fill_missing_pages,
             full_precision=self.full_precision,
             markdown=self.markdown,
             skipping=self.skipping,

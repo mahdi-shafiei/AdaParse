@@ -14,6 +14,24 @@ def resolve_device() -> str:
         return "mps"
     return "cpu"
 
+def resolve_dtype(full_precision: bool, device_str: str) -> torch.dtype:
+    """
+    Decide the target dtype for inference given the device and a 'bf16' preference.
+    - CUDA: use bf16 if supported, else fp16 fallback (or fp32 if you prefer stricter).
+    - XPU: use bf16 (fast path on Intel XPUs).
+    - MPS: prefer fp16 today
+    - CPU: fp32 (bf16 is slower/spotty)
+    """
+    if full_precision:
+        return torch.float32
+    if device_str == "cuda":
+        return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    if device_str == "xpu":
+        return torch.bfloat16
+    if device_str == "mps":
+        return torch.float16
+    return torch.float32
+
 def move_to_device_accelerator(model):
     """
     Move stat. model to accelerator (AdaParse's Regression model)

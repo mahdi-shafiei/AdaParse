@@ -178,3 +178,22 @@ convention = "numpy"
 [tool.setuptools.packages.find]
 exclude = ["tests*", "testing*"]
 namespaces = false
+
+[tool.pytest.ini_options]
+markers = [
+  "fs: file-system checks (local paths, filesizes, etc.)",
+  "online: tests that hit the network (opt-in; set ADAPARSE_RUN_ONLINE_TESTS=1 to run)",
+  "integration: slower tests that touch filesystem / external deps",
+]
+filterwarnings = [
+  "ignore:.*always_apply is deprecated.*:DeprecationWarning",
+  "ignore:.*ShiftScaleRotate is deprecated.*:DeprecationWarning",
+  "ignore:.*cval is deprecated.*:DeprecationWarning",
+  "ignore:.*value is deprecated.*:DeprecationWarning",
+  "ignore:.*quality_lower.*:DeprecationWarning",
+  "ignore:.*var_limit.*:DeprecationWarning",
+  "ignore:.*A new version of Albumentations is available.*:UserWarning",
+  "ignore:.*SwigPyObject.*__module__ attribute:DeprecationWarning",
+  "ignore:.*SwigPyPacked.*__module__ attribute:DeprecationWarning",
+  "ignore:.*swigvarlink.*__module__ attribute:DeprecationWarning",
+]

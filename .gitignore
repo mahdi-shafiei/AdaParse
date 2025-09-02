@@ -9,6 +9,10 @@ __pycache__/
 # Jupyter notebook testing
 _notebooks/
 
+# env details generated at ./init...
+.adaparse.env
+.adaparse_state.json
+
 # Distribution / packaging
 .Python
 build/

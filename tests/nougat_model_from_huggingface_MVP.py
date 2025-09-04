@@ -18,14 +18,23 @@ from transformers.file_utils import ModelOutput
 
 from torchvision.transforms.functional import resize, rotate
 
-from postprocessing import postprocess # local nougat
+from adaparse.parsers.nougat_parser.postprocessing import postprocess
+from adaparse.device_utils import move_to_custom_device
+
+# --------------------------------------------------------
+# BLOCK WEB REQUESTS
+# --------------------------------------------------------
+os.environ.setdefault("ALBUMENTATIONS_DISABLE_VERSION_CHECK", "1")
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # --------------------------------------------------------
 # timm-0.5.4
 # timm/data/constants.py
 # --------------------------------------------------------
-IMAGENET_DEFAULT_MEAN = (0.485, 0.456, 0.406)
-IMAGENET_DEFAULT_STD = (0.229, 0.224, 0.225)
+from adaparse.parsers.nougat_parser.legacy_timm.data.constants import IMAGENET_DEFAULT_MEAN
+from adaparse.parsers.nougat_parser.legacy_timm.data.constants import IMAGENET_DEFAULT_STD
 
 def crop_margin(img: Image.Image) -> Image.Image:
         """
@@ -112,7 +121,6 @@ test_transform = alb_wrapper(
     )
 )
 
-
 def to_tensor():
     return test_transform
 
@@ -191,158 +199,6 @@ def subdiv(l, b=10):
         subs.append(l[: i + b])
     return subs
 
-
-# ========= Inference that mirrors the original behavior =========
-def inference(
-        image: Image.Image = None,
-        nougat_model: VisionEncoderDecoderModel = None,
-        nougat_processor: NougatProcessor = None,
-        tokenizer = None,
-        image_tensors: Optional[torch.Tensor] = None,
-        return_attentions: bool = False,
-        early_stopping: bool = True,
-    ):
-        """
-        Generate a token sequence in an auto-regressive manner.
-
-        Args:
-            image: input document image (PIL.Image)
-            image_tensors: (1, num_channels, height, width)
-                convert prompt to tensor if image_tensor is not fed
-        """
-        output = {
-            "predictions": list(),
-            "sequences": list(),
-            "repeats": list(),
-            "repetitions": list(),
-        }
-        if image is None and image_tensors is None:
-            #logging.warn("Image not found")
-            print("Image not found")
-            return output
-
-        # infer dtype
-        dtype = next(nougat_model.encoder.parameters()).dtype
-
-        # FOXTROT
-        FOXTROT = True
-
-        # FOXTROTT
-        if FOXTROT:
-            print('Foxtrot mode')
-            inputs = nougat_processor(images=image, return_tensors="pt").to(device=nougat_model.device, dtype=nougat_model.dtype)  # -> pixel_values: (B,3,896,672), float32, normalized
-            pixel_values = inputs.pixel_values.to(device=nougat_model.device, dtype=nougat_model.dtype)       # keep contiguous
-
-            # CHECK
-            print("pixel_values dtype:", pixel_values.dtype)   # should be float32/bfloat16/float16
-            print("min/max:", float(pixel_values.min()), float(pixel_values.max()))
-
-            with torch.no_grad():
-                enc_out = nougat_model.encoder(pixel_values=pixel_values, return_dict=True)
-                last_hidden_state = enc_out.last_hidden_state
-
-        # nougat source
-        else:
-            if image_tensors is None:
-                image_tensors = prepare_input(image).unsqueeze(0)
-            if nougat_model.encoder.device != "mps":
-                image_tensors = image_tensors.to(dtype)
-            image_tensors = image_tensors.to(nougat_model.encoder.device)
-            last_hidden_state = nougat_model.encoder(image_tensors)
-
-        encoder_outputs = ModelOutput(
-            last_hidden_state=last_hidden_state, attentions=None
-        )
-
-        if len(encoder_outputs.last_hidden_state.size()) == 1:
-            encoder_outputs.last_hidden_state = (
-                encoder_outputs.last_hidden_state.unsqueeze(0)
-            )
-
-        # get decoder output
-        decoder_output = nougat_model.generate(
-            encoder_outputs=encoder_outputs,
-            min_length=1,
-            max_length=nougat_model.config.max_length,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id,
-            use_cache=True,
-            bad_words_ids=[
-                [tokenizer.unk_token_id],
-            ],
-            return_dict_in_generate=True,
-            output_scores=True,
-            output_attentions=return_attentions,
-            do_sample=False,
-            stopping_criteria=StoppingCriteriaList(
-                [StoppingCriteriaScores()] if early_stopping else []
-            ),
-        )
-        output["repetitions"] = decoder_output.sequences.clone()
-        output["sequences"] = decoder_output.sequences.clone()
-        batch_size = len(decoder_output.sequences)
-
-        logits = torch.stack(decoder_output.scores, 1).cpu().max(-1)
-        values = logits.values
-        indices = logits.indices
-
-        for b in range(batch_size):
-            mask = indices[b] != nougat_model.decoder.tokenizer.pad_token_id
-            N = mask.sum().item()
-            var = np.array(
-                [np.var(s) / len(s) for s in batch(values[b, mask].float().numpy())]
-            )
-            if len(var) < 10:
-                output["repeats"].append(None)
-                continue
-            varvar = np.array([np.var(v) for v in subdiv(var[::-1])][::-1])
-            minlen = 120
-            if (
-                indices[b] == nougat_model.decoder.tokenizer.eos_token_id
-            ).any() and N + 1 < indices.shape[1]:
-                # there is an end to the generation, likely no repetitions
-                output["repeats"].append(None)
-                continue
-            small_var = np.where(varvar < 0.045)[0]
-            if early_stopping and len(small_var) > 1:
-                if np.all(np.diff(small_var) < 2):
-                    idx = int(min(max(small_var[0], 1) * 1.08 + minlen, 4095))
-                    if idx / N > 0.9:  # at most last bit
-                        output["repeats"].append(None)
-                        continue
-                    elif small_var[0] < 30:
-                        idx = 0
-
-                    #logging.warn("Found repetitions in sample %i" % b)
-                    print("Found repetitions in sample %i" % b)
-
-                    output["repeats"].append(idx)
-                    output["sequences"][b, idx:] = nougat_model.decoder.tokenizer.pad_token_id
-                    output["repetitions"][b, :idx] = nougat_model.decoder.tokenizer.pad_token_id
-                else:
-                    output["repeats"].append(None)
-            else:
-                output["repeats"].append(None)
-        output["repetitions"] = nougat_model.decoder.tokenizer.batch_decode(
-            output["repetitions"], skip_special_tokens=True
-        )
-        output["predictions"] = postprocess(
-            nougat_model.decoder.tokenizer.batch_decode(
-                output["sequences"], skip_special_tokens=True
-            ),
-            markdown_fix=False,
-        )
-
-        if return_attentions:
-            output["attentions"] = {
-                "self_attentions": decoder_output.decoder_attentions,
-                "cross_attentions": decoder_output.cross_attentions,
-            }
-
-        return output
-
-# ========= Your CLI script, now calling the above =========
-
 def main(args):
     # load model/processor
     model_dir = '/home/siebenschuh/AdaParse/models/facebook__nougat-base'
@@ -358,17 +214,13 @@ def main(args):
     tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(tokenizer_file_path))
 
     # device management
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
+    model = move_to_custom_device(model)
 
     # Debug: confirm HF pre-processing matches expectations
     image = Image.open(args.image_path).convert('RGB')
 
-    #inputs = processor(images=image, return_tensors="pt").to(device)
-    inputs = processor(images=image, return_tensors="pt").to(device=model.device, dtype=model.dtype)
-
-
-    encoded = processor(images=image, return_tensors="pt")
+    # process
+    encoded = processor(images=image, return_tensors="pt").to(device=model.device, dtype=model.dtype)
     pixel_values = encoded.pixel_values
 
     # If processor returned uint8, make it float
@@ -385,8 +237,8 @@ def main(args):
         pixel_values = pixel_values / 255.0
 
     if do_normalize:
-        mean = torch.tensor(getattr(ip, "image_mean", [0.485, 0.456, 0.406])).view(1, 3, 1, 1)
-        std  = torch.tensor(getattr(ip, "image_std",  [0.229, 0.224, 0.225])).view(1, 3, 1, 1)
+        mean = torch.tensor(getattr(ip, "image_mean", IMAGENET_DEFAULT_MEAN)).view(1, 3, 1, 1)
+        std  = torch.tensor(getattr(ip, "image_std",  IMAGENET_DEFAULT_STD)).view(1, 3, 1, 1)
         pixel_values = (pixel_values - mean) / std
 
     # Final device/dtype cast
@@ -469,37 +321,10 @@ def main(args):
         markdown_fix=False,
     )
 
-    if False:
-        output["attentions"] = {
-            "self_attentions": decoder_output.decoder_attentions,
-            "cross_attentions": decoder_output.cross_attentions,
-        }
-
     # print
     print(output["predictions"])
 
     return
-
-    # tokenizer
-    tokenizer_file_path = '/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/checkpoint/tokenizer.json'
-    tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(tokenizer_file_path))
-    tokenizer.pad_token = "<pad>"
-    tokenizer.bos_token = "<s>"
-    tokenizer.eos_token = "</s>"
-    tokenizer.unk_token = "<unk>"
-
-    # model.prepare_input()
-    out = inference(image=image,
-                    nougat_model=model,
-                    nougat_processor=processor,
-                    tokenizer=tokenizer)
-
-    print(out)
-
-    # If you want to inspect where we cut:
-    # print("repeat_index:", out["repeats"][0])
-    # print("repetition_tail:", out["repetitions"][0])
-
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Extract text from PDF images using Nougat')

@@ -1,6 +1,9 @@
 # model.py (NEW)
 from __future__ import annotations
 
+import os
+os.environ.setdefault("ALBUMENTATIONS_DISABLE_VERSION_CHECK", "1")
+
 from pathlib import Path
 from typing import List, Optional, Union
 from collections import defaultdict
@@ -24,7 +27,8 @@ from transformers.modeling_outputs import Seq2SeqLMOutput
 from transformers.modeling_outputs import BaseModelOutput
 
 # from timm.models.swin_transformer import SwinTransformer # LEGACY
-from legacy_timm.models.swin_transformer import SwinTransformer
+#from legacy_timm.models.swin_transformer import SwinTransformer # NEW but dysfunctional
+from adaparse.parsers.nougat_parser.legacy_timm.models.swin_transformer import SwinTransformer
 
 from transformers import (
     PreTrainedTokenizerFast,
@@ -35,8 +39,10 @@ from transformers import (
     MBartForConditionalGeneration
 )
 
-from nougat.postprocessing import postprocess
-from nougat.transforms import train_transform, test_transform
+# from nougat.postprocessing import postprocess # LEGACY
+from adaparse.parsers.nougat_parser.postprocessing import postprocess
+# from nougat.transforms import train_transform, test_transform # LEGACY
+from adaparse.parsers.nougat_parser.transforms import train_transform, test_transform
 
 class SwinEncoder(nn.Module):
     r"""
@@ -96,24 +102,44 @@ class SwinEncoder(nn.Module):
         print('In model.py ... ')
         print(f'name_or_path : {name_or_path}')
 
-        # default: name_or_path = None hence weights from Nougat checkpoint
-        if not name_or_path:
-            # LEGACY: timm 0.5.4
-            # - - - - - - - - - -
-            #swin_state_dict = timm.create_model(
-            #    "swin_base_patch4_window12_384", pretrained=True
-            #).state_dict()
+        # DEBUG: block in `if False` maybe completely misguided
+        # - .bin contains both encoder and decoeder weights
+        # - torch.load deprecation warning
+        # - empty meta model
 
-            # NEW: timm 1.0.19
-            # - - - - - - - - - -
-            p_ckpt_pretrain = Path(self.config.name_or_path / "swin_base_patch4_window12_384_22kto1k.pth")
-            if p_ckpt_pretrain.is_file():
-                swin_state_dict = torch.load(p_ckpt_pretrain, map_location="cpu")
-            else:
-                raise FileNotFoundError("Pre-trained Swin checkpoint (.pth) path not found")
+        # default: name_or_path = None hence weights from Nougat checkpoint
+        # timm.create fairly broken doesn't work
+        # swin_state_dict = timm.create_model('timm/swin_base_patch4_window12_384_in22k', pretrained=True).state_dict()
+        if False:
+            # DEBUG
+
+            if False:
+                print('Indeed, `name_or_path` is not None!')
+                # LEGACY: timm 0.5.4
+                # - - - - - - - - - -
+                #swin_state_dict = timm.create_model(
+                #    "swin_base_patch4_window12_384", pretrained=True
+                #).state_dict()
+
+                # NEW: timm 1.0.19
+                # - - - - - - - - - -
+                swin_ckpt_pretrain = Path(name_or_path) / "swin_base_patch4_window12_384_22kto1k.pth"
+                if swin_ckpt_pretrain.is_file():
+                    swin_state_dict = torch.load(swin_ckpt_pretrain, map_location="cpu")['model']
+                    # DEBUG
+                    print('loaded ..w12_384_22kto1k.pth into SWIN!')
+                else:
+                    raise FileNotFoundError("Pre-trained Swin checkpoint (.pth) path not found")
 
             #
             new_swin_state_dict = self.model.state_dict()
+
+            # DEBUG
+            #print('\nnew_swin_state_dict.keys()')
+            #print(new_swin_state_dict.keys())
+            #print("\nswin_state_dict['model'].keys()")
+            #print(swin_state_dict['model'].keys())
+            # - - - - -
 
             for x in new_swin_state_dict:
                 if x.endswith("relative_position_index") or x.endswith("attn_mask"):
@@ -140,7 +166,8 @@ class SwinEncoder(nn.Module):
                         .squeeze(0)
                     )
                 else:
-                    new_swin_state_dict[x] = swin_state_dict[x]
+                    print(f'key name. x={x}')
+                    new_swin_state_dict[x] = swin_state_dict[x]   # <- bug here
             self.model.load_state_dict(new_swin_state_dict)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -238,10 +265,16 @@ class BARTDecoder(nn.Module):
         name_or_path: str | Path,
         hidden_dimension: int = 1024,
         cond_gen: bool = False,  # new arg
+        dropout=0.0, attention_dropout=0.0, activation_dropout=0.0
     ):
         super().__init__()
         self.decoder_layer = int(decoder_layer)
         self.max_position_embeddings = int(max_position_embeddings)
+
+        # always load weights locally
+        p = Path(name_or_path)
+        if not p.exists():
+            raise FileNotFoundError(f"[BARTDecoder] name_or_path does not exist: {p}")
 
         # tokenizer (fail-fast)
         p = Path(name_or_path)
@@ -272,6 +305,10 @@ class BARTDecoder(nn.Module):
             scale_embedding=True,
             add_final_layer_norm=True,
             d_model=int(hidden_dimension),
+            # NEW: carry through the configured dropouts for stability-equivalence
+            dropout=dropout,
+            attention_dropout=attention_dropout,
+            activation_dropout=activation_dropout,
         )
 
         # MBartForCausalLM (original)
@@ -279,12 +316,15 @@ class BARTDecoder(nn.Module):
 
         # load weights from path (local, fine-tuned)
         #self.model = ModelCls.from_pretrained(str(p), low_cpu_mem_usage=True)  # changed
-        self.model = ModelCls(config=cfg, low_cpu_mem_usage=True) # new
+        #self.model = ModelCls(config=cfg, low_cpu_mem_usage=True) # new low_cpu_mem_usage unknown even under transformers 4.55.0
+        self.model = ModelCls(config=cfg) # new
 
         if not cond_gen:
             self.model.config.is_encoder_decoder = True  # ensure X-attn flag still flipped
             self.model.prepare_inputs_for_generation = self.prepare_inputs_for_inference
         #self.model.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id  # out now?
+        self.model.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id
+
 
     def add_special_tokens(self, list_of_tokens: List[str]) -> None:
         """
@@ -465,6 +505,8 @@ class NougatConfigInference(PretrainedConfig):
             Max position embeddings(=maximum sequence length) you want to train
         name_or_path:
             Name of a pretrained model name either registered in huggingface.co. or saved in local
+        deterministic:
+            If True, runs pipeline explicitely as deterministic
         full_precision:
             If True, float32 else bf16
     """
@@ -493,9 +535,18 @@ class NougatConfigInference(PretrainedConfig):
         deterministic: bool = True,
         full_precision: bool = False,
         seed: int | None = 1234,
+        # new
+        compile_encoder: bool = True,             # compile after loading
+        bootstrap_swin_from_pth: bool = False,    # only use local .pth if True
+        pretrained_swin_pth: str | None = None,   # explicit .pth path, overrides default
         **kwargs,
     ):
         super().__init__()
+        # existing assignments...
+        self.compile_encoder = compile_encoder
+        self.bootstrap_swin_from_pth = bootstrap_swin_from_pth
+        self.pretrained_swin_pth = pretrained_swin_pth
+        # args
         self.input_size = input_size
         self.align_long_axis = align_long_axis
         self.window_size = window_size
@@ -530,6 +581,10 @@ class NougatModelInference(PreTrainedModel):
         super().__init__(config)
         self.config = config
 
+        # DEBUG
+        #print(f'self.config.name_or_path : {self.config.name_or_path}')
+
+
         # encoder (ViT)
         self.encoder = SwinEncoder(
             input_size=self.config.input_size,
@@ -542,18 +597,29 @@ class NougatModelInference(PreTrainedModel):
             num_heads=self.config.num_heads,
         )
 
+        # carry decoder dropouts from config into instance (so BARTDecoder sees them)
+        for k in ("decoder_dropout","decoder_attention_dropout","decoder_activation_dropout"):
+            setattr(self.decoder if hasattr(self, "decoder") else self, k, getattr(self.config, k, 0.0))
+
+
         # decoder (mBART)
         self.decoder = BARTDecoder(
             decoder_layer=self.config.decoder_layer,
             max_position_embeddings=self.config.max_position_embeddings,
             name_or_path=self.config.name_or_path,
             hidden_dimension=self.config.hidden_dimension,
-            cond_gen=self.config.cond_gen # new
+            cond_gen=self.config.cond_gen, # new
+            dropout=self.config.decoder_dropout,
+            attention_dropout=self.config.decoder_attention_dropout,
+            activation_dropout=self.config.decoder_activation_dropout,
         )
 
         # inference by default
         self.eval()
         self.requires_grad_(False)
+
+        # IMPORTANT: DO NOT COMPILE HERE. We’ll compile in from_pretrained after load.
+        self._compiled = False
 
         # device/dtype management
         from adaparse.parsers.device_utils import resolve_device
@@ -572,12 +638,13 @@ class NougatModelInference(PreTrainedModel):
         self._dtype = next(self.parameters()).dtype
         self._non_blocking = self._device.type in ("cuda", "xpu")
         self._use_channels_last = (self._device.type == "cuda")
+        self.deterministic = getattr(config, "deterministic", False)
 
         # deterministic (portable)
-        self._sdpa_ctx = self._make_sdpa_ctx(deterministic=getattr(config, "deterministic", False))
+        self._sdpa_ctx = self._make_sdpa_ctx(self.deterministic)
 
         # - device switch
-        torch.use_deterministic_algorithms(self.config.deterministic)
+        torch.use_deterministic_algorithms(self.deterministic)
 
         # decoder defaults
         gen = GenerationConfig.from_model_config(self.decoder.model.config)
@@ -592,10 +659,10 @@ class NougatModelInference(PreTrainedModel):
         self._gen_cfg = gen
 
         # -------- compile encoder only (safe win) --------
-        try:
-            self.encoder = torch.compile(self.encoder, fullgraph=True, mode="reduce-overhead")
-        except Exception:
-            pass
+        #try:
+        #    self.encoder = torch.compile(self.encoder, fullgraph=True, mode="reduce-overhead")
+        #except Exception:
+        #    pass
 
     @staticmethod
     def _make_sdpa_ctx(deterministic: bool):
@@ -803,36 +870,34 @@ class NougatModelInference(PreTrainedModel):
         return output
 
     @classmethod
-    def from_pretrained(
-        cls,
-        model_path: str | bytes | Path,
-        *model_args,
-        **kwargs,
-    ):
-        r"""
-        Instantiate a pretrained nougat model from a pre-trained model configuration
-
-        Args:
-            model_path:
-                Name of a pretrained model name either registered in huggingface.co. or saved in local.
-        """
-        model = super(NougatModelInference, cls).from_pretrained(
-            model_path, *model_args, **kwargs
+    def from_pretrained(cls, model_path: str | bytes | Path, *args, **kwargs):
+        # 1) ensure we don't mask true mismatches
+        #kwargs.setdefault("ignore_mismatched_sizes", False)
+        kwargs.setdefault("ignore_mismatched_sizes", True)
+        # 2) we might get a user-supplied config; mark it to defer compile
+        cfg = kwargs.get("config", None)
+        if cfg is not None:
+            setattr(cfg, "__defer_compile__", True)
+        model: "NougatModelInference" = super(NougatModelInference, cls).from_pretrained(
+            model_path, *args, **kwargs
         )
 
-        # truncate or interpolate position embeddings of decoder
-        # https://github.com/huggingface/transformers/blob/v4.11.3/src/transformers/models/mbart/modeling_mbart.py#L118-L119
-        max_length = kwargs.get("max_length", model.config.max_position_embeddings)
-        if (
-            max_length != model.config.max_position_embeddings
-        ):  # if max_length of trained model differs max_length you want to train
-            model.decoder.model.model.decoder.embed_positions.weight = torch.nn.Parameter(
-                model.decoder.resize_bart_abs_pos_emb(
-                    model.decoder.model.model.decoder.embed_positions.weight,
-                    max_length
-                    + 2,
+        # 3) handle decoder absolute position embeddings deterministically
+        want = model.config.max_position_embeddings + 2
+        emb = model.decoder.model.model.decoder.embed_positions.weight
+        if emb.shape[0] != want:
+            with torch.no_grad():
+                model.decoder.model.model.decoder.embed_positions.weight = torch.nn.Parameter(
+                    model.decoder.resize_bart_abs_pos_emb(emb.detach(), want)
                 )
-            )
-            model.config.max_position_embeddings = max_length
+
+        # 4) compile the encoder AFTER all weights are loaded (optional)
+        if getattr(model.config, "compile_encoder", True) and not model._compiled:
+            try:
+                model.encoder = torch.compile(model.encoder, fullgraph=True, mode="reduce-overhead")
+                model._compiled = True
+            except Exception:
+                # fall back quietly; determinism intact
+                pass
 
         return model

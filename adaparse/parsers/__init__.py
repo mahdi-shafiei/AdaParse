@@ -6,8 +6,8 @@ from typing import Any
 
 from adaparse.parsers.adaparse import AdaParse
 from adaparse.parsers.adaparse import AdaParseConfig
-from adaparse.parsers.base import BaseParser
-from adaparse.parsers.base import BaseParserConfig
+#from adaparse.parsers.base import BaseParser
+#from adaparse.parsers.base import BaseParserConfig
 from adaparse.parsers.marker import MarkerParser
 from adaparse.parsers.marker import MarkerParserConfig
 from adaparse.parsers.nougat_ import NougatParser
@@ -20,8 +20,6 @@ from adaparse.parsers.tesseract import TesseractParser
 from adaparse.parsers.tesseract import TesseractParserConfig
 from adaparse.registry import registry
 
-# from adaparse.parsers.oreo import OreoParser
-# from adaparse.parsers.oreo import OreoParserConfig
 ParserConfigTypes = (
     # | AdaFastConfig
     AdaParseConfig

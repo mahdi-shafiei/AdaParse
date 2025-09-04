@@ -1,6 +1,15 @@
 import os
+
+# --------------------------------------------------------
+# BLOCK WEB REQUESTS
+# --------------------------------------------------------
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1") # crucial
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
 from PIL import Image, ImageOps
 import torch
+import intel_extension_for_pytorch as ipex # test
 import cv2
 from pathlib import Path
 import numpy as np
@@ -20,14 +29,6 @@ from torchvision.transforms.functional import resize, rotate
 
 from adaparse.parsers.nougat_parser.postprocessing import postprocess
 from adaparse.device_utils import move_to_custom_device
-
-# --------------------------------------------------------
-# BLOCK WEB REQUESTS
-# --------------------------------------------------------
-os.environ.setdefault("ALBUMENTATIONS_DISABLE_VERSION_CHECK", "1")
-os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # --------------------------------------------------------
 # timm-0.5.4
@@ -200,10 +201,16 @@ def subdiv(l, b=10):
     return subs
 
 def main(args):
+
+    # STATUS
+    print('\n\n IN main() \n\n')
+
     # load model/processor
     model_dir = '/home/siebenschuh/AdaParse/models/facebook__nougat-base'
     processor = NougatProcessor.from_pretrained(model_dir, use_fast=True, local_files_only=True)
+    print('\nAfter processor = ... \n')
     model = VisionEncoderDecoderModel.from_pretrained(model_dir, local_files_only=True)
+    print('\nAfter model = ... \n')
 
     model.config.decoder_start_token_id = processor.tokenizer.bos_token_id
     model.config.pad_token_id           = processor.tokenizer.pad_token_id
@@ -214,7 +221,12 @@ def main(args):
     tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(tokenizer_file_path))
 
     # device management
-    model = move_to_custom_device(model)
+    #model = move_to_custom_device(model, bf16=False)
+
+    # DEBUG
+    print(f'Before optimization: model.dtype={model.dtype}')
+    model = ipex.optimize(model, dtype=model.dtype)
+    print('... after')
 
     # Debug: confirm HF pre-processing matches expectations
     image = Image.open(args.image_path).convert('RGB')
@@ -223,110 +235,120 @@ def main(args):
     encoded = processor(images=image, return_tensors="pt").to(device=model.device, dtype=model.dtype)
     pixel_values = encoded.pixel_values
 
-    # If processor returned uint8, make it float
-    if pixel_values.dtype == torch.uint8:
-        pixel_values = pixel_values.float()
+    # DEBUG
+    with torch.no_grad():
+        # If processor returned uint8, make it float
+        if pixel_values.dtype == torch.uint8:
+            pixel_values = pixel_values.float()
 
-    # If values still look like 0..255, rescale & normalize like Nougat expects
-    ip = processor.image_processor
-    do_rescale   = getattr(ip, "do_rescale", True)
-    do_normalize = getattr(ip, "do_normalize", True)
+        # If values still look like 0..255, rescale & normalize like Nougat expects
+        ip = processor.image_processor
+        do_rescale   = getattr(ip, "do_rescale", True)
+        do_normalize = getattr(ip, "do_normalize", True)
 
-    # Rescale only if it looks un-rescaled
-    if do_rescale and pixel_values.max() > 1.5:
-        pixel_values = pixel_values / 255.0
+        # Rescale only if it looks un-rescaled
+        if do_rescale and pixel_values.max() > 1.5:
+            pixel_values = pixel_values / 255.0
 
-    if do_normalize:
-        mean = torch.tensor(getattr(ip, "image_mean", IMAGENET_DEFAULT_MEAN)).view(1, 3, 1, 1)
-        std  = torch.tensor(getattr(ip, "image_std",  IMAGENET_DEFAULT_STD)).view(1, 3, 1, 1)
-        pixel_values = (pixel_values - mean) / std
+        if do_normalize:
+            mean = torch.tensor(getattr(ip, "image_mean", IMAGENET_DEFAULT_MEAN)).view(1, 3, 1, 1)
+            std  = torch.tensor(getattr(ip, "image_std",  IMAGENET_DEFAULT_STD)).view(1, 3, 1, 1)
+            # device
+            mean = mean.to(pixel_values.device)
+            std = std.to(pixel_values.device)
+            # normalization
+            pixel_values = (pixel_values - mean) / std
+            # DEBUG
+            print(f'pixel_values.dtype : {pixel_values.dtype}')
 
-    # Final device/dtype cast
-    pixel_values = pixel_values.to(device=model.device, dtype=model.dtype, non_blocking=False)
+        # Final device/dtype cast
+        pixel_values = pixel_values.to(device=model.device, dtype=model.dtype, non_blocking=False)
 
-    # Sanity check (remove later)
-    #print("pixel_values:", pixel_values.dtype, float(pixel_values.min()), float(pixel_values.max()))
-    assert pixel_values.is_floating_point(), "pixel_values must be float"
+        # Sanity check (remove later)
+        #print("pixel_values:", pixel_values.dtype, float(pixel_values.min()), float(pixel_values.max()))
+        assert pixel_values.is_floating_point(), "pixel_values must be float"
 
-    # output
-    output = {
-            "predictions": list(),
-            "sequences": list(),
-            "repeats": list(),
-            "repetitions": list(),
-        }
+        # output
+        output = {
+                "predictions": list(),
+                "sequences": list(),
+                "repeats": list(),
+                "repetitions": list(),
+            }
 
-    # generate (full model, not decoder)
-    decoder_output = model.generate(
-        pixel_values=pixel_values,
-        return_dict_in_generate=True,
-        output_scores=True,
-        do_sample=False,
-        max_new_tokens=1024,              # or use max_length if you prefer
-        bad_words_ids=[[processor.tokenizer.unk_token_id]],
-        stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])  # if you want your early stopping
-    )
-
-    # VARS
-    early_stopping = True
-
-    output["repetitions"] = decoder_output.sequences.clone()
-    output["sequences"] = decoder_output.sequences.clone()
-    batch_size = len(decoder_output.sequences)
-
-    logits = torch.stack(decoder_output.scores, 1).cpu().max(-1)
-    values = logits.values
-    indices = logits.indices
-
-    for b in range(batch_size):
-        mask = indices[b] != tokenizer.pad_token_id
-        N = mask.sum().item()
-        var = np.array(
-            [np.var(s) / len(s) for s in batch(values[b, mask].float().numpy())]
+        # generate (full model, not decoder)
+        decoder_output = model.generate(
+            pixel_values=pixel_values,
+            return_dict_in_generate=True,
+            output_scores=True,
+            do_sample=False,
+            max_new_tokens=1024,              # or use max_length if you prefer
+            bad_words_ids=[[processor.tokenizer.unk_token_id]],
+            stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])  # if you want your early stopping
         )
-        if len(var) < 10:
-            output["repeats"].append(None)
-            continue
-        varvar = np.array([np.var(v) for v in subdiv(var[::-1])][::-1])
-        minlen = 120
-        #if (indices[b] == tokenizer.eos_token_id).any() and (N + 1 < indices.shape[1]):
-        if (indices[b] == tokenizer.eos_token_id) and (N + 1 < indices.shape[1]):
-            # there is an end to the generation, likely no repetitions
-            output["repeats"].append(None)
-            continue
-        small_var = np.where(varvar < 0.045)[0]
-        if early_stopping and len(small_var) > 1:
-            if np.all(np.diff(small_var) < 2):
-                idx = int(min(max(small_var[0], 1) * 1.08 + minlen, 4095))
-                if idx / N > 0.9:  # at most last bit
+
+        # VARS
+        early_stopping = True
+
+        output["repetitions"] = decoder_output.sequences.clone()
+        output["sequences"] = decoder_output.sequences.clone()
+        batch_size = len(decoder_output.sequences)
+
+        logits = torch.stack(decoder_output.scores, 1).cpu().max(-1)
+        values = logits.values
+        indices = logits.indices
+
+        for b in range(batch_size):
+            mask = indices[b] != tokenizer.pad_token_id
+            N = mask.sum().item()
+            var = np.array(
+                [np.var(s) / len(s) for s in batch(values[b, mask].float().numpy())]
+            )
+            if len(var) < 10:
+                output["repeats"].append(None)
+                continue
+            varvar = np.array([np.var(v) for v in subdiv(var[::-1])][::-1])
+            minlen = 120
+            #if (indices[b] == tokenizer.eos_token_id).any() and (N + 1 < indices.shape[1]):
+            if (indices[b] == tokenizer.eos_token_id) and (N + 1 < indices.shape[1]):
+                # there is an end to the generation, likely no repetitions
+                output["repeats"].append(None)
+                continue
+            small_var = np.where(varvar < 0.045)[0]
+            if early_stopping and len(small_var) > 1:
+                if np.all(np.diff(small_var) < 2):
+                    idx = int(min(max(small_var[0], 1) * 1.08 + minlen, 4095))
+                    if idx / N > 0.9:  # at most last bit
+                        output["repeats"].append(None)
+                        continue
+                    elif small_var[0] < 30:
+                        idx = 0
+                    #logging.warn("Found repetitions in sample %i" % b)
+                    output["repeats"].append(idx)
+                    output["sequences"][b, idx:] = tokenizer.pad_token_id
+                    output["repetitions"][b, :idx] = tokenizer.pad_token_id
+                else:
                     output["repeats"].append(None)
-                    continue
-                elif small_var[0] < 30:
-                    idx = 0
-                #logging.warn("Found repetitions in sample %i" % b)
-                output["repeats"].append(idx)
-                output["sequences"][b, idx:] = tokenizer.pad_token_id
-                output["repetitions"][b, :idx] = tokenizer.pad_token_id
             else:
                 output["repeats"].append(None)
-        else:
-            output["repeats"].append(None)
-    output["repetitions"] = tokenizer.batch_decode(
-        output["repetitions"], skip_special_tokens=True
-    )
-    output["predictions"] = postprocess(
-        tokenizer.batch_decode(
-            output["sequences"], skip_special_tokens=True
-        ),
-        markdown_fix=False,
-    )
+        output["repetitions"] = tokenizer.batch_decode(
+            output["repetitions"], skip_special_tokens=True
+        )
+        output["predictions"] = postprocess(
+            tokenizer.batch_decode(
+                output["sequences"], skip_special_tokens=True
+            ),
+            markdown_fix=False,
+        )
 
-    # print
-    print(output["predictions"])
+        # print
+        print(output["repetitions"])
+        #print(output["predictions"])
 
-    return
+        return
 
 if __name__=='__main__':
+
     parser = argparse.ArgumentParser(description='Extract text from PDF images using Nougat')
     parser.add_argument('image_path', help='Path to the image file (e.g., ./data/page_1.png)')
     parser.add_argument('--output', '-o', help='Output file to save the extracted text (optional)')

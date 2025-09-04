@@ -22,6 +22,8 @@ from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 from adaparse.utils import exception_handler
 from adaparse.utils import setup_logging
 
+from transformers import VisionEncoderDecoderModel
+from transformers import NougatProcessor
 
 __all__ = [
     'NougatParser',
@@ -89,11 +91,21 @@ class NougatParser(BaseParser):
     def __init__(self, config: NougatParserConfig) -> None:
         """Initialize the marker parser."""
         import torch
-        from nougat import NougatModel                  # nougat lib
+        #from nougat import NougatModel                  # nougat lib
         # from nougat_parser.model import NougatModel   # own implementation
 
         self.config = config
-        self.model = NougatModel.from_pretrained(config.checkpoint)
+
+        # OLD SCHOOL: FROM LOCAL MACHINE
+        #self.model = NougatModel.from_pretrained(config.checkpoint) # LEGACY
+        # NEW SCHOOL: HF (Sept 3rd)
+        #self.model = VisionEncoderDecoderModel.from_pretrained('facebook/nougat-base') # FAIL
+        #self.model = VisionEncoderDecoderModel.from_pretrained(self.config.checkpoint)  # FAIL, incopatible
+        # FOXTROT
+        self.model = VisionEncoderDecoderModel.from_pretrained('/home/siebenschuh/AdaParse/models/facebook__nougat-base', local_files_only=True)
+        self.processor = NougatProcessor.from_pretrained('/home/siebenschuh/AdaParse/models/facebook__nougat-base', use_fast=True)
+
+        # TODO: update
         self.model.eval()
 
         # move model
@@ -131,7 +143,7 @@ class NougatParser(BaseParser):
             The extracted documents.
         """
         import torch
-        from nougat.postprocessing import markdown_compatible
+        from nougat.postprocessing import markdown_compatible # LEGACY
         from nougat.utils.dataset import LazyDataset
         from torch.utils.data import ConcatDataset
         from torch.utils.data import DataLoader
@@ -148,8 +160,13 @@ class NougatParser(BaseParser):
             self.config.batchsize = 1
 
         # extract formatting arguments
-        align_long_axis = bool(self.model.encoder.align_long_axis)
-        input_size = list(self.model.encoder.input_size)
+
+        # FOXTROT X X X X
+        # NougatModel from HF - no `align_long_axis`
+        #align_long_axis = bool(self.model.encoder.align_long_axis)
+        align_long_axis = False # hack, from SwinEncoder config
+        input_size = [896, 672] # hack, from SwinEncoder config
+        # X X X X X X X
         random_padding = False
         # - combine
         prepared_arg_triplet = (align_long_axis, input_size, random_padding)
@@ -214,12 +231,15 @@ class NougatParser(BaseParser):
         self.logger.info(f"\nprint(len(dataloader)): {len(dataloader)}")
         # = = = = = = = = = = = = = = = = = = = = = = =
 
+        # X X X X X
         # First pass to get the model outputs
-        for sample, is_last_page in dataloader:
-            model_output = self.model.inference(
-                image_tensors=sample, early_stopping=self.config.skipping
-            )
-            model_outputs.append((model_output, is_last_page))
+        #for sample, is_last_page in dataloader:
+        #    model_output = self.model.inference(
+        #        image_tensors=sample, early_stopping=self.config.skipping
+        #    )
+        # X X X X X
+        model_outputs.append((model_output, is_last_page))
+
 
         self.logger.info(
             f'First pass took {time.time() - start:.2f} seconds. '

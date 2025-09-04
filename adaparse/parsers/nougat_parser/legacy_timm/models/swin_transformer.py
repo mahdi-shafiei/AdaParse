@@ -22,7 +22,7 @@ import logging
 from typing import Optional
 
 # UTILITY FUNCTIONS
-from .layers.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from ..data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .layers.weights_init import trunc_normal_
 from .layers.helpers import to_2tuple
 from .layers.trace_utils import _assert
@@ -45,7 +45,7 @@ def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: b
         return x
     keep_prob = 1 - drop_prob
     # work with diff dim tensors
-    shape = (x.shape[0],) + (1,) * (x.ndim - 1)  
+    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
     random_tensor = x.new_empty(shape).bernoulli_(keep_prob)
     if keep_prob > 0.0 and scale_by_keep:
         random_tensor.div_(keep_prob)
@@ -172,7 +172,12 @@ class WindowAttention(nn.Module):
         # get pair-wise relative position index for each token inside the window
         coords_h = torch.arange(self.window_size[0])
         coords_w = torch.arange(self.window_size[1])
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+
+        # culprit of notorius `_VF.meshgrid(...)`
+        #coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
+        # new
+        coords = torch.stack(torch.meshgrid(coords_h, coords_w, indexing="ij"))   # 2, Wh, Ww
+
         coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
         relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
         relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2

@@ -6,7 +6,7 @@ import time
 from functools import partial
 from pathlib import Path
 from typing import Any
-from typing import Literal
+from typing import Literal, List, Dict
 
 import pymupdf
 
@@ -14,9 +14,9 @@ from pydantic import field_validator
 
 from adaparse.parsers.base import BaseParser
 from adaparse.parsers.base import BaseParserConfig
-from adaparse.parsers.device_utils import build_doc_and_indices
-from adaparse.parsers.device_utils import move_to_custom_device
-from adaparse.parsers.device_utils import resolve_device # new
+from adaparse.device_utils import build_doc_and_indices
+from adaparse.device_utils import move_to_custom_device
+from adaparse.device_utils import resolve_device # new
 from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 
 from adaparse.utils import exception_handler
@@ -24,6 +24,8 @@ from adaparse.utils import setup_logging
 
 from transformers import VisionEncoderDecoderModel
 from transformers import NougatProcessor
+from transformers import PreTrainedTokenizerFast
+
 
 __all__ = [
     'NougatParser',
@@ -90,7 +92,11 @@ class NougatParser(BaseParser):
 
     def __init__(self, config: NougatParserConfig) -> None:
         """Initialize the marker parser."""
+        # torch on aurora
         import torch
+        if torch.xpu.is_available():
+            import intel_extension_for_pytorch as ipex
+
         #from nougat import NougatModel                  # nougat lib
         # from nougat_parser.model import NougatModel   # own implementation
 
@@ -102,23 +108,33 @@ class NougatParser(BaseParser):
         #self.model = VisionEncoderDecoderModel.from_pretrained('facebook/nougat-base') # FAIL
         #self.model = VisionEncoderDecoderModel.from_pretrained(self.config.checkpoint)  # FAIL, incopatible
         # FOXTROT
-        self.model = VisionEncoderDecoderModel.from_pretrained('/home/siebenschuh/AdaParse/models/facebook__nougat-base', local_files_only=True)
-        self.processor = NougatProcessor.from_pretrained('/home/siebenschuh/AdaParse/models/facebook__nougat-base', use_fast=True)
+        model = VisionEncoderDecoderModel.from_pretrained(self.config.checkpoint, local_files_only=True)
+        self.processor = NougatProcessor.from_pretrained(self.config.checkpoint, use_fast=True)
+        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(Path(self.config.checkpoint) / 'tokenizer.json'))
 
-        # TODO: update
-        self.model.eval()
+        # (1.) eval mode
+        model.eval()
 
-        # move model
-        self.model = move_to_custom_device(
-            self.model,
+        # (2.) to device
+        model = move_to_custom_device(
+            model,
             bf16=not self.config.full_precision,
         )
+
+        # (3.) ipex optimization (for XPU only)
+        use_ipex = hasattr(torch, "xpu") and torch.xpu.is_available()
+        if use_ipex:
+            model = ipex.optimize(model, dtype=model.dtype)
+
         # compile model
         try:
-            self.model = torch.compile(self.model, fullgraph=True)
+            model = torch.compile(model, fullgraph=True)
         except Exception:
             # fall back silently; compilation is optional
             self.logger = setup_logging('[WARNING] Failed to compile model', config.nougat_logs_path)
+
+        # assign
+        self.model = model
 
         self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
@@ -143,27 +159,54 @@ class NougatParser(BaseParser):
             The extracted documents.
         """
         import torch
-        from nougat.postprocessing import markdown_compatible # LEGACY
+        #from nougat.postprocessing import markdown_compatible # LEGACY
         from nougat.utils.dataset import LazyDataset
+        from adaparse.parsers.nougat_parser.postprocessing import markdown_compatible
         from torch.utils.data import ConcatDataset
         from torch.utils.data import DataLoader
+
+        # FOXTROT - - - - - -
+        from contextlib import ExitStack, nullcontext
+
+        def amp_infer_context(model, *, no_grad=True):
+            """
+            Helper to set context
+            """
+            p = next(model.parameters(), None)
+            dev = getattr(p, "device", torch.device("cpu"))
+            dt  = getattr(p, "dtype", torch.float32)
+
+            cm = ExitStack()
+            if no_grad:
+                cm.enter_context(torch.inference_mode())  # faster than no_grad for inference
+
+            if dev.type == "cuda" and dt in (torch.float16, torch.bfloat16):
+                cm.enter_context(torch.amp.autocast("cuda", dtype=dt))
+            elif dev.type == "cpu" and dt == torch.bfloat16:
+                cm.enter_context(torch.amp.autocast("cpu", dtype=torch.bfloat16))
+            elif dev.type == "xpu" and dt in (torch.float16, torch.bfloat16):
+                #cm.enter_context(torch.xpu.amp.autocast(dtype=dt, cache_enabled=False)) # bad style
+                cm.enter_context(torch.amp.autocast("xpu", dtype=torch.bfloat16))
+            else:
+                cm.enter_context(nullcontext())
+
+            return cm
+        #  - - - - - -
 
         pdfs = [Path(pdf_file) for pdf_file in pdf_files]
 
         # HOUSEKEEPING
         # from adaparse.parsers.device_utils import resolve_device # legacy
 
-        device_str = resolve_device()
-        device = torch.device(device_str)
+        # redundant
+        #device_str = resolve_device()
+        #device = torch.device(device_str)
 
+        # batch size
         if self.config.batchsize <= 0:
             self.config.batchsize = 1
 
-        # extract formatting arguments
-
         # FOXTROT X X X X
-        # NougatModel from HF - no `align_long_axis`
-        #align_long_axis = bool(self.model.encoder.align_long_axis)
         align_long_axis = False # hack, from SwinEncoder config
         input_size = [896, 672] # hack, from SwinEncoder config
         # X X X X X X X
@@ -171,11 +214,13 @@ class NougatParser(BaseParser):
         # - combine
         prepared_arg_triplet = (align_long_axis, input_size, random_padding)
 
-        datasets = []
+        # dataset
+        datasets: List[LazyDataset] = []
         for pdf in pdfs:
             if not pdf.exists():
                 self.logger.warning(f'Could not find {pdf}. Skipping.')
                 continue
+
             if self.config.mmd_out is not None:
                 out_path = self.config.mmd_out / pdf.with_suffix('.mmd').name
                 if out_path.exists() and not self.config.recompute:
@@ -217,12 +262,13 @@ class NougatParser(BaseParser):
         # dataloader
         dataloader = DataLoader(ConcatDataset(datasets), **dl_kwargs)
 
-        documents = []
-        predictions = []
+        documents = List[Dict[str, Any]] = []
+        predictions: List[str] = []
         file_index = 0
         page_num = 0
         model_outputs = []
 
+        # START
         start = time.time()
 
         # = = = = = = = = = = = = = = = = = = = = = = =
@@ -231,14 +277,22 @@ class NougatParser(BaseParser):
         self.logger.info(f"\nprint(len(dataloader)): {len(dataloader)}")
         # = = = = = = = = = = = = = = = = = = = = = = =
 
+
         # X X X X X
-        # First pass to get the model outputs
-        #for sample, is_last_page in dataloader:
-        #    model_output = self.model.inference(
-        #        image_tensors=sample, early_stopping=self.config.skipping
-        #    )
+        # 1st pass: pure Nougat inference
+        for sample, is_last_page in dataloader:
+            pass
+            # LEGACY: model.inference()
+            #model_output = self.model.inference(
+            #    image_tensors=sample, early_stopping=self.config.skipping
+            #    )
+            # New VisionEncoderDecoder, NougatProcessor, PreTrainedTokenizer
+
+
         # X X X X X
-        model_outputs.append((model_output, is_last_page))
+        return
+        # append
+        #model_outputs.append((model_output, is_last_page))
 
 
         self.logger.info(
@@ -252,7 +306,9 @@ class NougatParser(BaseParser):
         #self.logger.info(f"\nprint(len(model_outputs)): {len(model_outputs)}")
         # = = = = = = = = = = = = = = = = = = = = = = =
 
-        # Second pass to process the model outputs
+        # LazyDataset produces [B, 3, H, W] fixed-size tensors
+        # 2nd pass: to process the model outputs
+        #
         for i, (model_output, is_last_page) in enumerate(model_outputs):
             # check if model output is faulty
             for j, output in enumerate(model_output['predictions']):
@@ -277,6 +333,7 @@ class NougatParser(BaseParser):
                             self.logger.warning("PyMuPDF open failed; falling back to Nougat only.")
                             doc = None
 
+                # Handcrafted post-processing
                 page_num += 1
                 if output.strip() == '[MISSING_PAGE_POST]':
                     # uncaught repetitions -- potentially empty page

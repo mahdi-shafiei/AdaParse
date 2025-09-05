@@ -24,7 +24,7 @@ from adaparse.parsers.pymupdf import PyMuPDFParser
 from adaparse.parsers.pymupdf import PyMuPDFParserConfig
 from adaparse.timer import Timer
 from adaparse.utils import exception_handler
-from adaparse.parsers.device_utils import move_to_device_accelerator
+from adaparse.device_utils import move_to_device_accelerator
 
 __all__ = [
     'AdaParse',

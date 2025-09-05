@@ -622,8 +622,8 @@ class NougatModelInference(PreTrainedModel):
         self._compiled = False
 
         # device/dtype management
-        from adaparse.parsers.device_utils import resolve_device
-        from adaparse.parsers.device_utils import resolve_dtype
+        from adaparse.device_utils import resolve_device
+        from adaparse.device_utils import resolve_dtype
 
         device_str = resolve_device()
         self._device = torch.device(device_str)

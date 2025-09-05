@@ -22,7 +22,7 @@ import logging
 from typing import Optional
 
 # UTILITY FUNCTIONS
-from ..data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from ...constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .layers.weights_init import trunc_normal_
 from .layers.helpers import to_2tuple
 from .layers.trace_utils import _assert

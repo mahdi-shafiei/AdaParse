@@ -1,164 +1,41 @@
+from __future__ import annotations
+
 import os
 
 # BLOCK WEB REQUESTS
-os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1") # crucial
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
+#os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1") # crucial
+#os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+#os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 # torch on aurora
 import torch
 if torch.xpu.is_available():
     import intel_extension_for_pytorch as ipex
 
-import cv2
-from PIL import Image, ImageOps
-
 from pathlib import Path
-import numpy as np
-from typing import Optional, List, Dict, Any, Iterable
+from typing import List, Dict, Any, Iterable
 import argparse
 from collections import defaultdict
 from functools import partial
 from contextlib import ExitStack, nullcontext
 
-import albumentations as alb
-from albumentations.pytorch import ToTensorV2
-
 from transformers import VisionEncoderDecoderModel, NougatProcessor
 from transformers import PreTrainedTokenizerFast
 from transformers import StoppingCriteria, StoppingCriteriaList
 
-from torchvision.transforms.functional import resize, rotate
-
-from adaparse.parsers.nougat_parser.postprocessing import postprocess
+from adaparse.parsers.nougat_parser.decoding import process_decoder_output
 from adaparse.device_utils import move_to_custom_device
 from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 
-# Nougat-specific imports
-#from nougat.utils.dataset import LazyDataset # legacy
-
 from adaparse.parsers.nougat_parser.utils.dataset import LazyDataset
-from adaparse.parsers.nougat_parser.postprocessing import markdown_compatible
-from torch.utils.data import ConcatDataset
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 # -----------------------------------
 # timm-0.5.4
 # timm/data/constants.py
 # -----------------------------------
-from adaparse.parsers.nougat_parser.legacy_timm.data.constants import IMAGENET_DEFAULT_MEAN
-from adaparse.parsers.nougat_parser.legacy_timm.data.constants import IMAGENET_DEFAULT_STD
-
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-# --- add near imports ---
-from pathlib import Path
-from typing import Iterable
-
-# --- tiny helpers ---
-IMG_EXTS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
-
-def iter_images(path: str | Path) -> list[Path]:
-    p = Path(path)
-    if p.is_file():
-        return [p]
-    if p.is_dir():
-        files = []
-        for ext in IMG_EXTS:
-            files += sorted(p.rglob(f"*{ext}"))
-        return files
-    raise FileNotFoundError(f"{p} not found")
-
-def chunked(seq: list, n: int) -> Iterable[list]:
-    for i in range(0, len(seq), n):
-        yield seq[i:i+n]
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-# ARGS
-def process_decoder_output(decoder_output,
-                           tokenizer,
-                           early_stopping:bool=True,
-                           min_len:int=120,
-                           repeat_threshold:int=10,
-                           variance_threshold:int=0.045,
-                           small_var_threshold:int=30,
-                           variance_mult:int=1.08,
-                           max_id:int=4095):
-    """
-    Helper to post-process generated output
-    """
-
-    # output
-    output = {
-            "predictions": list(),
-            "sequences": list(),
-            "repeats": list(),
-            "repetitions": list(),
-        }
-
-    output["repetitions"] = decoder_output.sequences.clone()
-    output["sequences"] = decoder_output.sequences.clone()
-    batch_size = len(decoder_output.sequences)
-
-    # infer logits
-    logits = torch.stack(decoder_output.scores, 1).cpu().max(-1)
-    values = logits.values
-    indices = logits.indices
-
-    # loop
-    for b in range(batch_size):
-        mask = indices[b] != tokenizer.pad_token_id
-        N = mask.sum().item()
-        var = np.array(
-            [np.var(s) / len(s) for s in batch(values[b, mask].float().numpy())]
-        )
-        if len(var) < repeat_threshold:
-            output["repeats"].append(None)
-            continue
-        varvar = np.array([np.var(v) for v in subdiv(var[::-1])][::-1])
-
-        #minlen = 120
-        #if (indices[b] == tokenizer.eos_token_id).any() and (N + 1 < indices.shape[1]): # bug of .any()
-        if (indices[b] == tokenizer.eos_token_id) and (N + 1 < indices.shape[1]):
-            # there is an end to the generation, likely no repetitions
-            output["repeats"].append(None)
-            continue
-        small_var = np.where(varvar < variance_threshold)[0]
-
-        # early stopping
-        if early_stopping and len(small_var) > 1:
-            if np.all(np.diff(small_var) < 2):
-                idx = int(min(max(small_var[0], 1) * variance_mult + min_len, max_id))
-                if idx / N > 0.9:  # at most last bit
-                    output["repeats"].append(None)
-                    continue
-                elif small_var[0] < small_var_threshold:
-                    idx = 0
-                #logging.warn("Found repetitions in sample %i" % b)
-                output["repeats"].append(idx)
-                output["sequences"][b, idx:] = tokenizer.pad_token_id
-                output["repetitions"][b, :idx] = tokenizer.pad_token_id
-            else:
-                output["repeats"].append(None)
-        else:
-            output["repeats"].append(None)
-    # loop done - - - -
-
-    # batch decode
-    output["repetitions"] = tokenizer.batch_decode(
-        output["repetitions"], skip_special_tokens=True
-    )
-    # postprocess predictions
-    output["predictions"] = postprocess(
-        tokenizer.batch_decode(
-            output["sequences"], skip_special_tokens=True
-        ),
-        markdown_fix=False,
-    )
-
-    return output
-
-
+from adaparse.parsers.nougat_parser.constants import IMAGENET_DEFAULT_MEAN
+from adaparse.parsers.nougat_parser.constants import IMAGENET_DEFAULT_STD
 
 def amp_infer_context(model, *, no_grad=True):
     """
@@ -183,92 +60,8 @@ def amp_infer_context(model, *, no_grad=True):
         cm.enter_context(nullcontext())
 
     return cm
-#  - - - - - -
 
 
-def crop_margin(img: Image.Image) -> Image.Image:
-        """
-        Crop
-        """
-        data = np.array(img.convert("L"))
-        data = data.astype(np.uint8)
-        max_val = data.max()
-        min_val = data.min()
-        if max_val == min_val:
-            return img
-        data = (data - min_val) / (max_val - min_val) * 255
-        gray = 255 * (data < 200).astype(np.uint8)
-
-        coords = cv2.findNonZero(gray)  # Find all non-zero points (text)
-        a, b, w, h = cv2.boundingRect(coords)  # Find minimum spanning bounding box
-        return img.crop((a, b, w + a, h + b))
-
-def prepare_input(img: Image.Image,
-                  input_size:List[int] = [896, 672],
-                  align_long_axis:bool=False,
-                  random_padding: bool = False) -> torch.Tensor:
-        """
-        Convert PIL Image to tensor according to specified input_size after following steps below:
-            - resize
-            - rotate (if align_long_axis is True and image is not aligned longer axis with canvas)
-            - pad
-        """
-        if img is None:
-            print('img is None -> None')
-            return
-        # crop margins
-        try:
-            img = crop_margin(img.convert("RGB"))
-        except OSError:
-            # might throw an error for broken files
-            print('OSError -> None')
-            return
-        if img.height == 0 or img.width == 0:
-            return
-        if align_long_axis and (
-            (input_size[0] > input_size[1] and img.width > img.height)
-            or (input_size[0] < input_size[1] and img.width < img.height)
-        ):
-            img = rotate(img, angle=-90, expand=True)
-
-        img = resize(img, min(input_size))
-        img.thumbnail((input_size[1], input_size[0]))
-        delta_width = input_size[1] - img.width
-        delta_height = input_size[0] - img.height
-
-        if random_padding:
-            pad_width = np.random.randint(low=0, high=delta_width + 1)
-            pad_height = np.random.randint(low=0, high=delta_height + 1)
-        else:
-            pad_width = delta_width // 2
-            pad_height = delta_height // 2
-        padding = (
-            pad_width,
-            pad_height,
-            delta_width - pad_width,
-            delta_height - pad_height,
-        )
-
-        transform = to_tensor()
-        return transform(ImageOps.expand(img, padding))
-
-def alb_wrapper(transform):
-    def f(im):
-        return transform(image=np.asarray(im))["image"]
-
-    return f
-
-test_transform = alb_wrapper(
-    alb.Compose(
-        [
-            alb.Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
-            ToTensorV2(),
-        ]
-    )
-)
-
-def to_tensor():
-    return test_transform
 
 # Running VarTorch
 class RunningVarTorch:
@@ -340,18 +133,7 @@ class StoppingCriteriaScores(StoppingCriteria):
                 self.stopped[b] = False
         return all(self.stopped.values()) and len(self.stopped) > 0
 
-# class StoppingCriteriaScores(StoppingCriteria)
-def batch(l, b=15):
-    subs = []
-    for i in range(len(l) - b):
-        subs.append(l[i : i + b])
-    return subs
 
-def subdiv(l, b=10):
-    subs = []
-    for i in range(len(l) - b):
-        subs.append(l[: i + b])
-    return subs
 
 def main(args):
     # load model/processor
@@ -474,35 +256,26 @@ def main(args):
     page_num = 0
     model_outputs = []
 
-    # single image inference
-    # Debug: confirm HF pre-processing matches expectations
-    #image = Image.open(args.image_path).convert('RGB')
-
     # = = = = = = = =
     #  INFERENCE
     #   (Nougat)
     # = = = = = = = =
     for sample, is_last_page in dataloader:
-        # DEBUG
-        #print(f"type(sample) : {type(sample)}")
-        #print(f"type(pixel_values) : {type(pixel_values)}")
-        #print(f"pixel_values.size() : {pixel_values.size()}")
-
+        # adaptive context
         with amp_infer_context(model=model):
             # encoder:
             encoded = processor(images=sample, return_tensors="pt").to(device=model.device, dtype=model.dtype)
             pixel_values = encoded.pixel_values
 
             # decoder: generate from full model
-            decoder_output = model.generate(
-                pixel_values=pixel_values,
-                return_dict_in_generate=True,
-                output_scores=True,
-                do_sample=False,
-                max_new_tokens=1024,              # or use max_length if you prefer
-                bad_words_ids=[[processor.tokenizer.unk_token_id]],
-                stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])  # if you want your early stopping
-            )
+            decoder_output = model.generate(pixel_values=pixel_values,
+                                            return_dict_in_generate=True,
+                                            output_scores=True,
+                                            do_sample=False,
+                                            max_new_tokens=1024,
+                                            bad_words_ids=[[processor.tokenizer.unk_token_id]],
+                                            stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])
+             )
 
             #filter
             output = process_decoder_output(decoder_output=decoder_output, tokenizer=tokenizer)
@@ -521,7 +294,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser(description='Extract text from PDF images using Nougat')
     parser.add_argument('pdf_dir', help='Path to the image file (e.g., ./data/)')
     parser.add_argument('--out_dir', '-o', help='Output file to save the extracted text (optional)')
-    parser.add_argument('--batch_size', '-b', type=int, default=1, help='Batch size')
+    parser.add_argument('--batch_size', '-b', type=int, default=4, help='Batch size')
     parser.add_argument('--num_workers', '-w', type=int, default=4, help='Number of workers')
     args = parser.parse_args()
     main(args)

@@ -11,7 +11,7 @@ from albumentations.pytorch import ToTensorV2
 import numpy as np
 from typing import Callable
 
-from adaparse.parsers.nougat_parser.legacy_timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from adaparse.parsers.nougat_parser.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
 def alb_wrapper(transform: alb.Compose) -> Callable:
     """Wrap an Albumentations transform so it accepts a PIL.Image and returns the 'image' field."""

@@ -21,6 +21,7 @@ from functools import lru_cache # FOXTROT
 
 # FOXTROT: supress albumentations version check
 os.environ.setdefault("ALBUMENTATIONS_DISABLE_VERSION_CHECK", "1")
+os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1") # crucial
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 # X X X X X X X X X X X X X

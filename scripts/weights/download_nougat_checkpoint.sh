@@ -1,141 +1,106 @@
 #!/usr/bin/env bash
-set -euo pipefail
-
-# ---------------------------------------------
-# download_nougat_checkpoint.sh
-# Downloads a Nougat checkpoint from GitHub releases into a target directory.
-# Makes the directory public/editable (a+rwX) at the end.
+# Prefetch the Hugging Face Nougat checkpoint into a local directory
 #
 # Usage:
-#   ./download_nougat_checkpoint.sh NOUGAT_CHECKPOINT [MODEL_TAG] [--force]
+#   download_nougat_checkpoint.sh <TARGET_DIR> [REVISION]
 #
-# Examples:
-#   ./download_nougat_checkpoint.sh ./checkpoint
-#   ./download_nougat_checkpoint.sh ./checkpoint 0.1.0-base
-#   ./download_nougat_checkpoint.sh ./checkpoint --force
-# ---------------------------------------------
+# Env overrides:
+#   REPO_ID            (default: facebook/nougat-base)
+#   QUIET=1            (less chatty; hides progress bars)
+#   HUGGINGFACE_TOKEN  (optional; inherited by CLI if set)
+#
+# Notes:
+# - Avoids ~/.local/bin/hf (which on your box points to a broken interpreter).
+# - Prefers 'huggingface-cli'; falls back to 'python -m huggingface_hub.cli.hf'.
+# - Forces ONLINE just for this command; resumes partial downloads.
+# - Uses a per-target local cache to reduce lock chatter.
 
-# default is `base` model
-# Source: https://github.com/facebookresearch/nougat
-BASE_URL="https://github.com/facebookresearch/nougat/releases/download"
-DEFAULT_MODEL_TAG="0.1.0-base"
+set -Eeuo pipefail
 
-# human-readable disk usage
-human_size() {
-  local bytes="$1"
-  if command -v numfmt >/dev/null 2>&1; then
-    numfmt --to=si --suffix=B "$bytes"    # e.g., 1.01GB
-  else
-    awk -v b="$bytes" 'BEGIN{
-      split("B KB MB GB TB PB", u, " ");
-      i=1; while (b>=1000 && i<length(u)) { b/=1000; i++ }
-      printf("%.2f%s", b, u[i])
-    }'
-  fi
-}
+REPO_ID="${REPO_ID:-facebook/nougat-base}"
+TARGET_DIR="${1:-}"
+REVISION="${2:-main}"
+QUIET="${QUIET:-0}"
 
-
-usage() {
-  cat <<USAGE
-Usage: $0 NOUGAT_CHECKPOINT [MODEL_TAG] [--force]
-
-Arguments:
-  NOUGAT_CHECKPOINT   Directory to save checkpoint files (required)
-  MODEL_TAG           Release tag (default: ${DEFAULT_MODEL_TAG})
-  --force             Re-download even if a file already exists
-
-Files downloaded from: ${BASE_URL}/<MODEL_TAG>/
-USAGE
-}
-
-# Download a single file with progress + sanity check
-download_one() {
-  local url="$1" name="$2" dest="$3" force="$4"
-
-  if [[ -f "${dest}/${name}" && "$force" != "1" ]]; then
-    echo "↪ Skipping ${name} (exists). Use --force to re-download."
-    return 0
-  fi
-
-  echo "↓ Downloading ${name}"
-  mkdir -p "$dest"
-  curl -fL --progress-bar -o "${dest}/${name}.part" "$url"
-  mv "${dest}/${name}.part" "${dest}/${name}"
-
-  # Sanity check: file should be larger than 15 bytes
-  local size
-  size=$(wc -c < "${dest}/${name}")
-  if [[ "$size" -le 15 ]]; then
-    echo "ERROR: ${name} too small (${size} bytes) — download likely failed." >&2
-    rm -f "${dest}/${name}"
-    return 1
-  fi
-  local pretty; pretty=$(human_size "$size")
-  echo "✓ ${name} (${pretty})"
-}
-
-main() {
-  # Help
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage; exit 0
-  fi
-
-  # Args
-  if [[ $# -lt 1 ]]; then
-    usage; exit 1
-  fi
-  local dest="$1"
-  shift || true
-
-  local model_tag="${DEFAULT_MODEL_TAG}"
-  local force="0"
-
-  # Parse optional args: [MODEL_TAG] [--force]
-  for arg in "$@"; do
-    if [[ "$arg" == "--force" ]]; then
-      force="1"
-    else
-      model_tag="$arg"
-    fi
-  done
-
-  echo "Downloading Nougat checkpoint:"
-  echo "  dest      : $dest"
-  echo "  model_tag : $model_tag"
-  echo "  force     : $([[ "$force" == "1" ]] && echo yes || echo no)"
-  echo
-
-  mkdir -p "$dest"
-
-  # Release file list (typical HF-style assets)
-  local files=(
-    "config.json"
-    "pytorch_model.bin"
-    "special_tokens_map.json"
-    "tokenizer.json"
-    "tokenizer_config.json"
-  )
-
-  local failures=0
-  for f in "${files[@]}"; do
-    url="${BASE_URL}/${model_tag}/${f}"
-    if ! download_one "$url" "$f" "$dest" "$force"; then
-      ((failures+=1))
-    fi
-  done
-
-  # Make directory public/editable
-  echo
-  echo "Setting public read/write permissions on: $dest"
-  chmod -R a+rwX "$dest"
-
-  if [[ "$failures" -gt 0 ]]; then
-    echo "Completed with ${failures} failed file(s)." >&2
-    exit 2
-  fi
-  echo " - - Download complete. Files saved to: $dest"
-}
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  main "$@"
+if [[ -z "${TARGET_DIR}" ]]; then
+  echo "ERROR: TARGET_DIR argument is required."
+  echo "Usage: $0 <TARGET_DIR> [REVISION]"
+  exit 2
 fi
+
+mkdir -p "${TARGET_DIR}"
+
+# --------------------------------------------------------------------
+# Pick a downloader that does NOT use ~/.local/bin/hf
+# 1) Prefer 'huggingface-cli' (worked for you)
+# 2) Else use current Python's module CLI: python -m huggingface_hub.cli.hf
+# --------------------------------------------------------------------
+DOWNLOADER=()
+if command -v huggingface-cli >/dev/null 2>&1; then
+  DOWNLOADER=(huggingface-cli download)
+else
+  PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
+  if "${PYTHON_BIN}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('huggingface_hub') else 1)"; then
+    DOWNLOADER=("${PYTHON_BIN}" -m huggingface_hub.cli.hf download)
+  else
+    echo "ERROR: Neither 'huggingface-cli' nor 'huggingface_hub' (in current Python) is available."
+    echo "Install one of:"
+    echo "  ${PYTHON_BIN} -m pip install -U huggingface_hub        # module CLI"
+    echo "  ${PYTHON_BIN} -m pip install -U 'huggingface_hub[cli]'  # also installs 'huggingface-cli'"
+    exit 3
+  fi
+fi
+
+# Optional niceties (local cache, quieter output, no telemetry) to reduce lock chatter
+export HUGGINGFACE_HUB_CACHE="${TARGET_DIR}/.cache/huggingface"
+mkdir -p "${HUGGINGFACE_HUB_CACHE}"
+{ echo "# cache"; echo "*"; } > "${HUGGINGFACE_HUB_CACHE}/.gitignore" 2>/dev/null || true
+export HF_HUB_DISABLE_TELEMETRY=1
+if [[ "${QUIET}" == "1" ]]; then
+  export HF_HUB_DISABLE_PROGRESS_BARS=1
+fi
+
+# Non-blocking lock to avoid races in multi-job runs
+exec 9>"${TARGET_DIR}/.download.lock" || true
+if ! flock -n 9; then
+  [[ "${QUIET}" == "1" ]] || echo "[HF] Another download is in progress for ${TARGET_DIR}; skipping."
+  exit 0
+fi
+
+need_download() {
+  # require config + (safetensors or bin) + tokenizer.json + preprocessor_config.json
+  [[ -f "${TARGET_DIR}/config.json" ]] && \
+  { [[ -f "${TARGET_DIR}/model.safetensors" ]] || [[ -f "${TARGET_DIR}/pytorch_model.bin" ]]; } && \
+  [[ -f "${TARGET_DIR}/tokenizer.json" ]] && \
+  [[ -f "${TARGET_DIR}/preprocessor_config.json" ]]
+}
+
+if need_download; then
+  [[ "${QUIET}" == "1" ]] || echo "[HF] Already present: ${TARGET_DIR} (skipping)"
+  exit 0
+fi
+
+[[ "${QUIET}" == "1" ]] || echo "[HF] Prefetching ${REPO_ID}@${REVISION} → ${TARGET_DIR}"
+
+# Force ONLINE just for this command; resume if partial; (no deprecated symlink flag)
+TRANSFORMERS_OFFLINE=0 HF_HUB_OFFLINE=0 \
+"${DOWNLOADER[@]}" "${REPO_ID}" \
+  --revision "${REVISION}" \
+  --local-dir "${TARGET_DIR}" \
+  --resume-download \
+  ${QUIET:+--quiet}
+
+# Basic verification
+if ! need_download; then
+  echo "ERROR: Download appears incomplete in ${TARGET_DIR}."
+  exit 4
+fi
+
+# Stamp metadata
+{
+  echo "repo=${REPO_ID}"
+  echo "revision=${REVISION}"
+  echo "fetched_at=$(date -Iseconds)"
+} > "${TARGET_DIR}/.fetched"
+
+[[ "${QUIET}" == "1" ]] || echo "[HF] Done. Checkpoint ready at: ${TARGET_DIR}"

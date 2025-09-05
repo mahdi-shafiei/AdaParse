@@ -107,33 +107,45 @@ _cancel_tokens='^(|c|n|no|q|quit|exit)$'  # empty input cancels too
 
 if [[ $ORIG_ARGC -eq 0 && -t 0 && -t 1 ]]; then
   echo "=== AUTO MODE ==="
-  _actual_user="$(whoami 2>/dev/null || echo "${USER:-}")"
-  _host_lc="$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    _actual_user="$(whoami 2>/dev/null || echo "${USER:-}")"
 
-  # Infer machine from hostname
+  # Prefer fully-qualified domain; fall back to short hostname if needed
+  _fqdn="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "")"
+  _domain="$(hostname -d 2>/dev/null || echo "")"
+
+  # lowercased variants
+  _fqdn_lc="${_fqdn,,}"
+  _domain_lc="${_domain,,}"
+
+  # Decide machine from FQDN per rules
   _machine="local"
-  if   [[ "$_host_lc" == aurora-uan-* ]]; then _machine="aurora"
-  elif [[ "$_host_lc" =~ ^lambda[0-9]+$ ]]; then _machine="lambda"
-  elif [[ "$_host_lc" == polaris* ]]; then      _machine="polaris"
-  elif [[ "$_host_lc" == sophia* ]]; then       _machine="sophia"
+  if [[ "$_fqdn_lc" == *"alcf.anl.gov"* ]]; then
+    if   [[ "$_fqdn_lc" == *"aurora"*  ]]; then _machine="aurora"
+    elif [[ "$_fqdn_lc" == *"sophia"*  ]]; then _machine="sophia"
+    elif [[ "$_fqdn_lc" == *"polaris"* ]]; then _machine="polaris"
+    else                                         _machine="local"
+    fi
+  else
+    _machine="local"
   fi
 
   # Default base path mapping
   case "$_machine" in
     polaris|sophia) _base="/eagle/projects" ;;
     aurora)         _base="/lus/flare/projects" ;;
-    lambda)         _base="/homes" ;;
-    local)          _base="" ;;  # must ask user
+    lambda)         _base="/homes" ;;   # only used if user explicitly picks --machine lambda
+    local)          _base="" ;;          # must ask user
   esac
 
   echo "Detected:"
   echo "  user    : $_actual_user"
-  echo "  host    : $_host_lc"
+  echo "  fqdn    : $_fqdn_lc"
+  [[ -n "$_domain_lc" ]] && echo "  domain  : $_domain_lc"
   echo "  machine : $_machine"
   [[ -n "$_base" ]] && echo "  base    : $_base"
   echo
 
-  # For big clusters, pick a project (sbank best-effort)
+
   # For big clusters, pick a project (sbank best-effort)
 _project=""
 if [[ "$_machine" =~ ^(polaris|sophia|aurora)$ ]]; then
@@ -234,6 +246,7 @@ done
 
 # ---------------------------------------------
 # Auto-detect machine if not provided
+# (based on hostname, ALCF-focused)
 # ---------------------------------------------
 if [[ -z "${MACHINE:-}" || "$MACHINE" == "local" ]]; then
   echo "=== MACHINE ==="
@@ -448,6 +461,7 @@ ADAPARSE_PROJECT_ROOT=$PROJECT_PATH
 ADAPARSE_CHECKPOINT=$NOUGAT_CHECKPOINT
 ENV
 echo "[INFO] wrote $ENV_FILE  (you can:  source $ENV_FILE)"
+echo
 
 # -------------------------------
 # SECTION: DATA IMPORT (always)
@@ -521,11 +535,12 @@ echo "[INFO] worker_init resolved for $MACHINE: $WORKER_INIT_CMD"
 echo
 
 # ---------------------------------------------------------------
+# LEGACY: SwinEncoder in `.bin`
 # SECTION: PRE-TRAINED SWIN TRANSFORMER WEIGHTS DOWNLOAD
 # ---------------------------------------------------------------
-echo "=== SWIN WEIGHTS DOWNLOAD ==="
-bash "${REPO_ROOT}/scripts/weights/download_swin_weights.sh" "$NOUGAT_CHECKPOINT"
-echo
+#echo "=== SWIN WEIGHTS DOWNLOAD ==="
+#bash "${REPO_ROOT}/scripts/weights/download_swin_weights.sh" "$NOUGAT_CHECKPOINT"
+#echo
 
 # ---------------------------------------------
 # SECTION: NOUGAT CHECKPOINT DOWNLOAD

@@ -26,9 +26,9 @@ dependencies = [
     #"torch==2.4.1",
     "pydantic>=2.6.1",
     "typer[all]>=0.7.0",
-    "transformers==4.38.2",
-    "albumentations==1.4.11",
-    "albucore==0.0.16",
+    "transformers==4.55.0",
+    "albumentations==2.0.8", # formerly 1.4.11
+    #"albucore==0.0.16",
     "fasttext>=0.9.3",
     "scikit-learn>=1.5.0",
     #"nougat-ocr==0.1.17",

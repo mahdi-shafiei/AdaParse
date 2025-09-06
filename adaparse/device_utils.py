@@ -1,5 +1,8 @@
 import torch
+if torch.xpu.is_available():
+    import intel_extension_for_pytorch as ipex
 import re
+from contextlib import ExitStack, nullcontext
 
 def resolve_device() -> str:
     """
@@ -66,3 +69,27 @@ def build_doc_and_indices(pages: list[str], sentinel: str = "\uE000") -> tuple[s
         starts.append(cur)
         cur += len(part)
     return "".join(parts), starts
+
+def amp_infer_context(model, *, no_grad=True):
+    """
+    Helper to set context
+    """
+    p = next(model.parameters(), None)
+    dev = getattr(p, "device", torch.device("cpu"))
+    dt  = getattr(p, "dtype", torch.float32)
+
+    cm = ExitStack()
+    if no_grad:
+        cm.enter_context(torch.inference_mode())  # faster than no_grad for inference
+
+    if dev.type == "cuda" and dt in (torch.float16, torch.bfloat16):
+        cm.enter_context(torch.amp.autocast("cuda", dtype=dt))
+    elif dev.type == "cpu" and dt == torch.bfloat16:
+        cm.enter_context(torch.amp.autocast("cpu", dtype=torch.bfloat16))
+    elif dev.type == "xpu" and dt in (torch.float16, torch.bfloat16):
+        #cm.enter_context(torch.xpu.amp.autocast(dtype=dt, cache_enabled=False)) # bad style
+        cm.enter_context(torch.amp.autocast("xpu", dtype=torch.bfloat16))
+    else:
+        cm.enter_context(nullcontext())
+
+    return cm

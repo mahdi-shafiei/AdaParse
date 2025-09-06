@@ -1,158 +1,38 @@
 from __future__ import annotations
 
-import os
-
-# BLOCK WEB REQUESTS
-#os.environ.setdefault("NO_ALBUMENTATIONS_UPDATE", "1") # crucial
-#os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-#os.environ.setdefault("HF_HUB_OFFLINE", "1")
-
 # torch on aurora
 import torch
 if torch.xpu.is_available():
     import intel_extension_for_pytorch as ipex
 
+import os
 from pathlib import Path
-from typing import List, Dict, Any, Iterable
+from typing import List
 import argparse
-from collections import defaultdict
 from functools import partial
-from contextlib import ExitStack, nullcontext
 
 from transformers import VisionEncoderDecoderModel, NougatProcessor
-from transformers import PreTrainedTokenizerFast
-from transformers import StoppingCriteria, StoppingCriteriaList
+from transformers import StoppingCriteriaList
 
-from adaparse.parsers.nougat_parser.decoding import process_decoder_output
-from adaparse.device_utils import move_to_custom_device
+from adaparse.parsers.nougat_parser.decoding import process_decoder_output, StoppingCriteriaScores
+from adaparse.device_utils import move_to_custom_device, amp_infer_context
 from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 
 from adaparse.parsers.nougat_parser.utils.dataset import LazyDataset
 from torch.utils.data import ConcatDataset, DataLoader
-
-# -----------------------------------
-# timm-0.5.4
-# timm/data/constants.py
-# -----------------------------------
-from adaparse.parsers.nougat_parser.constants import IMAGENET_DEFAULT_MEAN
-from adaparse.parsers.nougat_parser.constants import IMAGENET_DEFAULT_STD
-
-def amp_infer_context(model, *, no_grad=True):
-    """
-    Helper to set context
-    """
-    p = next(model.parameters(), None)
-    dev = getattr(p, "device", torch.device("cpu"))
-    dt  = getattr(p, "dtype", torch.float32)
-
-    cm = ExitStack()
-    if no_grad:
-        cm.enter_context(torch.inference_mode())  # faster than no_grad for inference
-
-    if dev.type == "cuda" and dt in (torch.float16, torch.bfloat16):
-        cm.enter_context(torch.amp.autocast("cuda", dtype=dt))
-    elif dev.type == "cpu" and dt == torch.bfloat16:
-        cm.enter_context(torch.amp.autocast("cpu", dtype=torch.bfloat16))
-    elif dev.type == "xpu" and dt in (torch.float16, torch.bfloat16):
-        #cm.enter_context(torch.xpu.amp.autocast(dtype=dt, cache_enabled=False)) # bad style
-        cm.enter_context(torch.amp.autocast("xpu", dtype=torch.bfloat16))
-    else:
-        cm.enter_context(nullcontext())
-
-    return cm
-
-
-
-# Running VarTorch
-class RunningVarTorch:
-    def __init__(self, L=15, norm=False):
-        self.values = None
-        self.L = L
-        self.norm = norm
-
-    def push(self, x: torch.Tensor):
-        assert x.dim() == 1
-        if self.values is None:
-            self.values = x[:, None]
-        elif self.values.shape[1] < self.L:
-            self.values = torch.cat((self.values, x[:, None]), 1)
-        else:
-            self.values = torch.cat((self.values[:, 1:], x[:, None]), 1)
-
-    def variance(self):
-        # values has shape (batch, num_samples_in_window)
-        n = 0 if self.values is None else self.values.shape[1]
-        if n < 2:
-            # Not enough samples yet → define variance as zeros (no early stopping impact)
-            return torch.zeros(
-                self.values.shape[0],
-                dtype=self.values.dtype,
-                device=self.values.device,
-            )
-
-        # Use sample variance (ddof=1) once we have >=2 samples (preserves your behavior)
-        try:
-            v = torch.var(self.values, dim=1, correction=1)  # PyTorch ≥1.10
-        except TypeError:
-            v = torch.var(self.values, dim=1, unbiased=True)  # older API
-
-        return v / n if self.norm else v
-
-# class RunningVarTorch
-class StoppingCriteriaScores(StoppingCriteria):
-    def __init__(self, threshold: float = 0.015, window_size: int = 200):
-        super().__init__()
-        self.threshold = threshold
-        self.vars = RunningVarTorch(norm=True)
-        self.varvars = RunningVarTorch(L=window_size)
-        self.stop_inds = defaultdict(int)
-        self.stopped = defaultdict(bool)
-        self.size = 0
-        self.window_size = window_size
-
-    @torch.no_grad()
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        last_scores = scores[-1]
-        self.vars.push(last_scores.max(1)[0].float().cpu())
-        self.varvars.push(self.vars.variance())
-        self.size += 1
-        if self.size < self.window_size:
-            return False
-
-        varvar = self.varvars.variance()
-        for b in range(len(last_scores)):
-            if varvar[b] < self.threshold:
-                if self.stop_inds[b] > 0 and not self.stopped[b]:
-                    self.stopped[b] = self.stop_inds[b] >= self.size
-                else:
-                    self.stop_inds[b] = int(
-                        min(max(self.size, 1) * 1.15 + 150 + self.window_size, 4095)
-                    )
-            else:
-                self.stop_inds[b] = 0
-                self.stopped[b] = False
-        return all(self.stopped.values()) and len(self.stopped) > 0
-
-
 
 def main(args):
     # load model/processor
     checkpoint = '/home/siebenschuh/AdaParse/models/facebook__nougat-base'
     processor = NougatProcessor.from_pretrained(checkpoint, use_fast=True, local_files_only=True)
     model = VisionEncoderDecoderModel.from_pretrained(checkpoint, local_files_only=True)
-    print('\nAfter model = ... \n')
 
     # = = = = = = =
     #    MODEL
     # = = = = = = =
-
     model.config.decoder_start_token_id = processor.tokenizer.bos_token_id
     model.config.pad_token_id           = processor.tokenizer.pad_token_id
     model.config.eos_token_id           = processor.tokenizer.eos_token_id
-
-    # tokenizer
-    tokenizer_file_path = Path(checkpoint) / 'tokenizer.json'
-    tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(tokenizer_file_path))
 
     # device management
     model = move_to_custom_device(model, bf16=False)
@@ -251,7 +131,7 @@ def main(args):
     dataloader = DataLoader(ConcatDataset(datasets), **dl_kwargs)
 
     documents = [] # List[Dict[str, Any]] = []
-    predictions: List[str] = []
+    predictions = []
     file_index = 0
     page_num = 0
     model_outputs = []
@@ -278,7 +158,7 @@ def main(args):
              )
 
             #filter
-            output = process_decoder_output(decoder_output=decoder_output, tokenizer=tokenizer)
+            output = process_decoder_output(decoder_output=decoder_output, tokenizer=processor.tokenizer)
 
             # print
             preds = output['predictions']

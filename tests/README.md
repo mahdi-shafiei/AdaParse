@@ -25,5 +25,10 @@ pytest test_standalone_swin_encoder.py -m fs -vv --log-cli-level=INFO -rs
 
 BartDecoder via
 ```
-pytest test_bart_decoder.py -m fs -vv --log-cli-level=INFO # TODO
+pytest test_bart_decoder.py -m fs -vv --log-cli-level=INFO
+```
+
+Nougat via new model pipeline
+```
+pytest tests/test_nougat.py -m fs -vv --log-cli-level=INFO
 ```

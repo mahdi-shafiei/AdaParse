@@ -16,6 +16,9 @@ __pycache__/
 # no models
 ./models/
 
+# test legacy code/utils
+./tests/legacy/
+
 # Distribution / packaging
 .Python
 build/

@@ -59,7 +59,7 @@ if [[ "$MACHINE" =~ ^(polaris|sophia|aurora)$ ]]; then
     read -r -p "Pick project # or type name (or C/No/N/Q to cancel): " choice_raw
     choice="$(printf '%s' "$choice_raw" | tr '[:upper:]' '[:lower:]')"
     if [[ "$choice" =~ $cancel ]]; then
-      echo "[INFO] Cancelled." >&2; exit 0
+      echo "[INFO] Cancelled." >&2; exit 130
     fi
     if [[ "$choice_raw" =~ ^[0-9]+$ ]] && (( choice_raw>=1 && choice_raw<=${#projs[@]} )); then
       project="${projs[choice_raw-1]}"
@@ -67,11 +67,11 @@ if [[ "$MACHINE" =~ ^(polaris|sophia|aurora)$ ]]; then
       project="$choice_raw"
     fi
   else
-    echo "[WARN] No projects found."
-    read -r -p "Enter project name (or C/No/N/Q to cancel): " choice_raw
+    { echo; echo "[WARN] No projects found."; echo; } >&2
+    read -r -p "Enter project name (or C/N/No to cancel): " choice_raw
     choice="$(printf '%s' "$choice_raw" | tr '[:upper:]' '[:lower:]')"
     if [[ "$choice" =~ $cancel ]]; then
-      echo "[INFO] Cancelled." >&2; exit 0
+      echo "[INFO] Initial setup of AdaParse: cancelled" >&2; exit 130
     fi
     project="$choice_raw"
   fi

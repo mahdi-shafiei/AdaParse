@@ -7,11 +7,14 @@ __pycache__/
 *.so
 
 # Jupyter notebook testing
-_notebooks/
+*_notebooks/
 
 # env details generated at ./init...
 .adaparse.env
 .adaparse_state.json
+
+# no models
+./models/
 
 # Distribution / packaging
 .Python
@@ -57,6 +60,14 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+
+# Tiny scripts
+tests/mini.py
+
+# Test Data Compilation
+tests/pdf_transfer.py
+tests/image.ipynb
+tests/data/legacy/
 
 # Translations
 *.mo

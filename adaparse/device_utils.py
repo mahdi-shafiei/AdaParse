@@ -3,6 +3,8 @@ if torch.xpu.is_available():
     import intel_extension_for_pytorch as ipex
 import re
 from contextlib import ExitStack, nullcontext
+import socket
+import subprocess
 
 def resolve_device() -> str:
     """
@@ -93,3 +95,24 @@ def amp_infer_context(model, *, no_grad=True):
         cm.enter_context(nullcontext())
 
     return cm
+
+
+def is_aurora_login_node() -> bool:
+    """
+    Returns False if hostname matches:
+      # Aurora Login node (fails to build transformers)
+      startswith('aurora-uan-') and endswith('.hostmgmt.cm.aurora.alcf.anl.gov')
+    Returns True otherwise.
+    """
+    # Get FQDN (prefer Python; fall back to `hostname -f`)
+    fqdn = socket.getfqdn().strip().lower()
+    if not fqdn or "." not in fqdn:
+        try:
+            fqdn = subprocess.run(
+                ["hostname", "-f"], check=True, capture_output=True, text=True
+            ).stdout.strip().lower()
+        except Exception:
+            fqdn = ""
+
+    is_aurora_uan = fqdn.startswith("aurora-uan-") and fqdn.endswith(".hostmgmt.cm.aurora.alcf.anl.gov")
+    return not is_aurora_uan

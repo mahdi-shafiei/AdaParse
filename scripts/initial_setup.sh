@@ -194,33 +194,6 @@ echo "=== NOUGAT META DIRS ==="
 printf "%s\n" "$NOUGAT_CHECKPOINT" "$NOUGAT_MMD_OUT" "$NOUGAT_LOGS"
 echo
 
-# --- Persistent state/env ---
-STATE_JSON="${REPO_ROOT}/.adaparse_state.json"
-ENV_FILE="${REPO_ROOT}/.adaparse.env"
-
-cat > "$STATE_JSON" <<JSON
-{
-  "machine": "$MACHINE",
-  "user_name": "$USER_NAME",
-  "project_name": "${PROJECT_NAME:-}",
-  "base_path": "$BASE_PATH",
-  "project_path": "$PROJECT_PATH",
-  "checkpoint_dir": "$NOUGAT_CHECKPOINT"
-}
-JSON
-echo "[INFO] wrote $STATE_JSON"
-
-cat > "$ENV_FILE" <<ENV
-ADAPARSE_MACHINE=$MACHINE
-ADAPARSE_USER_NAME=$USER_NAME
-ADAPARSE_PROJECT_NAME=${PROJECT_NAME:-}
-ADAPARSE_BASE_PATH=$BASE_PATH
-ADAPARSE_PROJECT_ROOT=$PROJECT_PATH
-ADAPARSE_CHECKPOINT=$NOUGAT_CHECKPOINT
-ENV
-echo "[INFO] wrote $ENV_FILE  (you can:  source $ENV_FILE)"
-echo
-
 # --- Machine envs (worker_init from YAML) ---
 echo "=== MACHINE ENVS ==="
 [[ -f "$ENV_MAP_PATH" ]] || die "env map not found: $ENV_MAP_PATH"
@@ -238,11 +211,8 @@ echo "=== NOUGAT CHECKPOINT DOWNLOAD ==="
 bash "$DL_NOUGAT" "$NOUGAT_CHECKPOINT"
 echo
 
-# --- Import sample data ---
-bash "$IMPORT" --archive "$ARCHIVE_LOCAL" --input-dir "$INPUT_DIR"
-
-# --- Render parser configs ---
-PRIMARY_CONFIG_YAML_LINE="$(
+# --- Render parser configs (capture BOTH assignments) ---
+eval "$(
   bash "$RENDER" \
     --repo-root "$REPO_ROOT" \
     --machine "$MACHINE" \
@@ -253,14 +223,37 @@ PRIMARY_CONFIG_YAML_LINE="$(
     --nougat-checkpoint "$NOUGAT_CHECKPOINT" \
     --nougat-mmd-out "$NOUGAT_MMD_OUT" \
     --nougat-logs "$NOUGAT_LOGS" \
-  | tail -n 1
+  | awk '/^(PYMUPDF_TEST_CONFIG|NOUGAT_TEST_CONFIG)=/'
 )"
-# Expect "PRIMARY_CONFIG_YAML=/abs/path"
-eval "$PRIMARY_CONFIG_YAML_LINE"
+
+# Now both vars are set in the current shell:
+echo "PYMUPDF_TEST_CONFIG=$PYMUPDF_TEST_CONFIG"
+echo "NOUGAT_TEST_CONFIG=$NOUGAT_TEST_CONFIG"
 echo
 
-# --- Usage example ---
+# --- Import sample data ---
+bash "$IMPORT" --archive "$ARCHIVE_LOCAL" --input-dir "$INPUT_DIR"
+
+# --- Persistent state/env ---
+ENV_FILE="${REPO_ROOT}/.adaparse.env"
+
+cat > "$ENV_FILE" <<ENV
+ADAPARSE_MACHINE=$MACHINE
+ADAPARSE_USER_NAME=$USER_NAME
+ADAPARSE_PROJECT_NAME=${PROJECT_NAME:-}
+ADAPARSE_BASE_PATH=$BASE_PATH
+ADAPARSE_PROJECT_ROOT=$PROJECT_PATH
+ADAPARSE_CHECKPOINT=$NOUGAT_CHECKPOINT
+DATA_TEST_PATH=$INPUT_DIR
+PYMUPDF_TEST_CONFIG=$PYMUPDF_TEST_CONFIG
+NOUGAT_TEST_CONFIG=$NOUGAT_TEST_CONFIG
+ENV
+echo "[INFO] wrote $ENV_FILE  (you can:  source $ENV_FILE)"
+echo
+
+# --- Test usage example ---
 echo "=== USAGE EXAMPLE ==="
+echo "python -m adaparse.convert --config ${PRIMARY_CONFIG_YAML}"
 echo "python -m adaparse.convert --config ${PRIMARY_CONFIG_YAML}"
 echo
 

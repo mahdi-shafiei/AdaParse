@@ -30,7 +30,8 @@ esc_sed() { printf '%s' "$1" | sed -e 's/[\/&|]/\\&/g'; }
 
 echo "=== CONFIG RENDER ==="
 PARSERS=(adaparse pymupdf nougat pypdf)
-PRIMARY_CONFIG_YAML=""
+PYMUPDF_TEST_CONFIG=""
+NOUGAT_TEST_CONFIG=""
 
 for PARSER in "${PARSERS[@]}"; do
   IN_TMPL="${REPO_ROOT}/configs/templates/${PARSER}/template.yaml"
@@ -64,10 +65,14 @@ for PARSER in "${PARSERS[@]}"; do
   echo "[OK] ${PARSER} -> ${OUT_TMPL}"
 
   if [[ -s "$OUT_TMPL" ]]; then
+    # PyMuPDF
     [[ -z "$PRIMARY_CONFIG_YAML" ]] && PRIMARY_CONFIG_YAML="$OUT_TMPL"
     [[ "$PARSER" == "pymupdf" ]] && PRIMARY_CONFIG_YAML="$OUT_TMPL"
+    # Nougat
+    [[ "$PARSER" == "nougat" ]] && NOUGAT_CONFIG_YAML="$OUT_TMPL"
   fi
 done
 
 echo
-echo "PRIMARY_CONFIG_YAML=${PRIMARY_CONFIG_YAML}"
+printf 'PRIMARY_CONFIG_YAML=%q\n' "$PRIMARY_CONFIG_YAML"
+printf 'NOUGAT_CONFIG_YAML=%q\n' "$NOUGAT_CONFIG_YAML"

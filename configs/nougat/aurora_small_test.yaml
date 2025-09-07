@@ -17,6 +17,8 @@ parser_settings:
   mmd_out: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/mmd"
   # If set to false, a will skip the pdfs that already have a parsed mmd file in mmd_out
   recompute: false
+  # If set to true, text of pages with "[MISSING...]" will be filled by PyMuPDF
+  fill_missing_pages: false
   # Set to true if you want to use fp32 instead of bfloat16 (false is recommended)
   full_precision: false
   # If set to true, output text will be formatted as a markdown file.

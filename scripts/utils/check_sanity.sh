@@ -41,7 +41,7 @@ if [[ ${#expected[@]} -gt 0 ]]; then
 fi
 
 if [[ -n "$USER_NAME" && "$USER_NAME" != "$_user_actual" ]]; then
-  warn "Provided --user_name='$USER_NAME' differs from logged-in user='$_user_actual'."
+  warn "Provided --user_name='$USER_NAME' differs from logged-in user name: '$_user_actual'."
 fi
 
 if [[ "$_mach_lc" =~ ^(polaris|sophia|aurora)$ ]] && [[ -n "$PROJECT_NAME" ]]; then
@@ -63,6 +63,23 @@ if [[ -n "$BASE_PATH" && ! -d "$BASE_PATH" ]]; then
 fi
 
 proj_parent="$(dirname -- "$PROJECT_PATH" 2>/dev/null || echo "")"
+
+# Check that the project root directory exists but is accessible; if not, exit early.
+proj_root="$(dirname -- "$proj_parent" 2>/dev/null || echo "")"   # e.g., /lus/flare/projects/<project>
+if [[ -n "$proj_root" && -d "$proj_root" ]]; then
+  if [[ ! -x "$proj_root" || ! -r "$proj_root" ]]; then
+    warn "Directory '$proj_root' exists but user '$USER_NAME' does not have access."
+    echo "          Run './utils/show_available_projects.sh' to see what projects you are a member of."
+    echo
+    echo "AdaParse initial setup: cancelled"
+    exit 65   # non-zero so initial_setup.sh (set -e) stops immediately
+  fi
+fi
+
+# Path exists
 if [[ -n "$proj_parent" && ! -d "$proj_parent" ]]; then
   warn "Parent directory for PROJECT_PATH does not exist: $proj_parent"
+  echo
+  echo "AdaParse initial setup: cancelled"
+  exit 65   # non-zero => caller (with set -e) terminates
 fi

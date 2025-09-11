@@ -11,11 +11,12 @@ import torch
 from albumentations.pytorch import ToTensorV2
 from PIL import Image
 from PIL import ImageOps
-from timm.data.constants import IMAGENET_DEFAULT_MEAN
-from timm.data.constants import IMAGENET_DEFAULT_STD
+
+from .nougat_parser.constants import IMAGENET_DEFAULT_MEAN
+from .nougat_parser.constants import IMAGENET_DEFAULT_STD
+
 from torchvision.transforms.functional import resize
 from torchvision.transforms.functional import rotate
-
 
 def alb_wrapper_sc(transform) -> Callable[[Image.Image], torch.Tensor]:
     """
@@ -26,7 +27,6 @@ def alb_wrapper_sc(transform) -> Callable[[Image.Image], torch.Tensor]:
         return transform(image=np.asarray(im))['image']
 
     return f
-
 
 # test Transformation
 test_transform_sc = alb_wrapper_sc(
@@ -45,8 +45,9 @@ def to_tensor_sc(training_flag: bool):
     """
     if training_flag:
         raise NotImplementedError(
-            'The AdaParse pipeline is for inference at scale - not training of Nougat.\n'
-            'Fine-tune Nougat weights within their framework and replace weights path in `parser_settings.checkpoint`.'
+            'The AdaParse pipeline is designed for inference at scale - not training of Nougat.\n'
+            'Fine-tune Nougat weights within *their framework* and replace weights path in `parser_settings.checkpoint`.\n'
+            'Reference: https://github.com/facebookresearch/nougat?tab=readme-ov-file#training'
         )
     else:
         return test_transform_sc

@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 import torch
 if torch.xpu.is_available():
     import intel_extension_for_pytorch as ipex
 import numpy as np
-from adaparse.parsers.nougat_parser.postprocessing import postprocess
 from transformers import StoppingCriteria
 from collections import defaultdict
+
+from adaparse.parsers.nougat_parser.postprocessing import postprocess
 
 class RunningVarTorch:
     def __init__(self, L=15, norm=False):

@@ -4,6 +4,7 @@ Copyright (c) Meta Platforms, Inc. and affiliates.
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
+from __future__ import annotations
 
 from typing import Union, List
 import re
@@ -14,13 +15,10 @@ from multiprocessing import Pool
 from functools import partial
 from rapidfuzz.fuzz import ratio as ratio_perc
 
-
 def ratio(*args, **kwargs):
     return ratio_perc(*args, **kwargs) / 100
 
-
 reference_pattern = re.compile(r"^\* \[\d+\]", flags=re.M)
-
 
 def markdown_compatible(s: str) -> str:
     """

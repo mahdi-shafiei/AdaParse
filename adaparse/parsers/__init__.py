@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from adaparse.parsers.adaparse import AdaParse
-from adaparse.parsers.adaparse import AdaParseConfig
 #from adaparse.parsers.base import BaseParser
 #from adaparse.parsers.base import BaseParserConfig
+
+from adaparse.parsers.adaparse import AdaParse
+from adaparse.parsers.adaparse import AdaParseConfig
 from adaparse.parsers.marker import MarkerParser
 from adaparse.parsers.marker import MarkerParserConfig
 from adaparse.parsers.nougat_ import NougatParser

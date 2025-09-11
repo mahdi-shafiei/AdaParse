@@ -16,7 +16,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms.functional import rotate, resize
-import timm
 from PIL import Image
 from PIL import ImageOps
 import cv2

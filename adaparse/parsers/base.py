@@ -10,9 +10,6 @@ from typing import Literal
 
 from adaparse.utils import BaseModel
 
-# TODO: We should update the parser return type to be a dataclass
-
-
 class BaseParser(ABC):
     """Base parser class for all parsers to inherit from."""
 

@@ -97,8 +97,6 @@ if [[ $# -eq 0 && -t 0 && -t 1 ]]; then
   fi
 
   echo
-  echo "[INFO] About to run:"
-  echo "  ${REEXEC_CMD}"
   read -r -p "Proceed? [Y/n]: " _yn
   _yn_lc="$(printf '%s' "${_yn:-y}" | tr '[:upper:]' '[:lower:]')"
   [[ "$_yn_lc" =~ ^(n|no)$ ]] && { echo "[INFO] Cancelled by user."; exit 0; }
@@ -253,8 +251,8 @@ echo
 
 # --- Test usage example ---
 echo "=== USAGE EXAMPLE ==="
-echo "python -m adaparse.convert --config ${PRIMARY_CONFIG_YAML}"
-echo "python -m adaparse.convert --config ${PRIMARY_CONFIG_YAML}"
+echo "python -m adaparse.convert --config ${PYMUPDF_TEST_CONFIG}"
+echo "python -m adaparse.convert --config ${NOUGAT_TEST_CONFIG}"
 echo
 
 echo "=== DONE ==="

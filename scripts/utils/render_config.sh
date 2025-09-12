@@ -66,13 +66,13 @@ for PARSER in "${PARSERS[@]}"; do
 
   if [[ -s "$OUT_TMPL" ]]; then
     # PyMuPDF
-    [[ -z "$PRIMARY_CONFIG_YAML" ]] && PRIMARY_CONFIG_YAML="$OUT_TMPL"
-    [[ "$PARSER" == "pymupdf" ]] && PRIMARY_CONFIG_YAML="$OUT_TMPL"
+    [[ -z "$PYMUPDF_TEST_CONFIG" ]] && PYMUPDF_TEST_CONFIG="$OUT_TMPL"
+    [[ "$PARSER" == "pymupdf" ]] && PYMUPDF_TEST_CONFIG="$OUT_TMPL"
     # Nougat
-    [[ "$PARSER" == "nougat" ]] && NOUGAT_CONFIG_YAML="$OUT_TMPL"
+    [[ "$PARSER" == "nougat" ]] && NOUGAT_TEST_CONFIG="$OUT_TMPL"
   fi
 done
 
 echo
-printf 'PRIMARY_CONFIG_YAML=%q\n' "$PRIMARY_CONFIG_YAML"
-printf 'NOUGAT_CONFIG_YAML=%q\n' "$NOUGAT_CONFIG_YAML"
+printf 'PYMUPDF_TEST_CONFIG=%q\n' "$PYMUPDF_TEST_CONFIG"
+printf 'NOUGAT_TEST_CONFIG=%q\n' "$NOUGAT_TEST_CONFIG"

@@ -18,8 +18,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
 from adaparse.parsers.base import BaseParser
-from adaparse.parsers.nougat_ import NougatParser
-from adaparse.parsers.nougat_ import NougatParserConfig
+from adaparse.parsers.nougat import NougatParser
+from adaparse.parsers.nougat import NougatParserConfig
 from adaparse.parsers.pymupdf import PyMuPDFParser
 from adaparse.parsers.pymupdf import PyMuPDFParserConfig
 from adaparse.timer import Timer

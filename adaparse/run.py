@@ -7,8 +7,8 @@ from pathlib import Path
 
 import yaml
 from nougat.utils.dataset import LazyDataset
-from adaparse.parsers.nougat_ import NougatParser
-from adaparse.parsers.nougat_ import NougatParserConfig
+from adaparse.parsers.nougat import NougatParser
+from adaparse.parsers.nougat import NougatParserConfig
 from torch.profiler import profile
 from torch.profiler import ProfilerActivity
 from torch.utils.data import ConcatDataset

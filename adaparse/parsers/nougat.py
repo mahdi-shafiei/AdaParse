@@ -7,10 +7,8 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 from typing import Literal, List, Dict
-
-import pymupdf
-
 from pydantic import field_validator
+from transformers import StoppingCriteriaList
 
 from adaparse.parsers.base import BaseParser
 from adaparse.parsers.base import BaseParserConfig
@@ -21,10 +19,6 @@ from adaparse.parsers.nougat_inference_utils import prepare_input_sc
 
 from adaparse.utils import exception_handler
 from adaparse.utils import setup_logging
-
-#from transformers import VisionEncoderDecoderModel
-#from transformers import NougatProcessor
-from transformers import StoppingCriteriaList
 
 from adaparse.parsers.nougat_parser.decoding import StoppingCriteriaScores
 from adaparse.parsers.nougat_parser.decoding import process_decoder_output
@@ -275,7 +269,7 @@ class NougatParser(BaseParser):
 
                 # post-processing
                 processed_doc_output = process_decoder_output(decoder_output=decoder_output,
-                                                          tokenizer=self.processor.tokenizer)
+                                                              tokenizer=self.processor.tokenizer)
 
                 # append
                 model_doc_outputs.append((processed_doc_output, is_last_page))
@@ -290,7 +284,6 @@ class NougatParser(BaseParser):
         # - - - - - - - - - - - - - - - -
         # 2nd pass: (optional) fill-in
         # - - - - - - - - - - - - - - - -
-        print('PASS 2')
         start = time.time()
 
         # document-loop
@@ -301,7 +294,7 @@ class NougatParser(BaseParser):
 
             # page loop
             for j, page_output in enumerate(doc_output['predictions']):
-                # first page
+                # first page only
                 if page_num == 0:
                     predictions=[]
                     doc_parser_name = 'nougat'
@@ -310,26 +303,27 @@ class NougatParser(BaseParser):
                     if self.config.fill_missing_pages and doc is None:
                         doc = safe_doc_open(datasets[file_index].name, self.logger)
 
-                # detect Nougat failure
-                if ('[MISSING_PAGE' in page_output) and (doc is not None):
-                    page_output = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
+                # every page
+                # - detect Nougat failure
+                if (('MISSING_PAGE' in page_output) or (len(page_output) < 20)) and (doc is not None):
+                    prev_len = len(page_output)
+                    page_output_tmp = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
                     doc_parser_name = 'nougat/pymupdf'
-                    self.logger.warning(f'Fill empty page {page_num} via PyMuPDF.')
-
-                # formatting (source-independent)
+                    new_len = len(page_output_tmp)
+                    if new_len > prev_len:
+                        page_output = page_output_tmp
+                # - formatting (source-independent)
                 if self.config.markdown:
+                    prev_len = len(page_output)
                     page_output = markdown_compatible(page_output)
-                    # DEBUG
-                    self.logger.warning("... Text: Formatted to mmd!")
+                    new_len = len(page_output)
                     # - -
 
                 # append
                 predictions.append(page_output)
 
-                # last page
+                # last page only
                 if is_last_page[j]:
-                    # DEBUG
-                    self.logger.warning("In ... is_last_page[j]!")
                     # - -
                     out, page_indices = build_doc_and_indices(predictions)
                     # - close doc
@@ -351,8 +345,6 @@ class NougatParser(BaseParser):
 
                     # write explicit .mmd
                     if self.config.mmd_out is not None:
-                        # DEBUG
-                        self.logger.warning("In ... mmd_out[j]!")
                         # - -
                         out_path = (
                             self.config.mmd_out
@@ -365,9 +357,9 @@ class NougatParser(BaseParser):
                     predictions = []
                     page_num = 0
                     file_index += 1
-
-                # - increment page
-                page_num+=1
+                else:
+                    # - increment page
+                    page_num+=1
 
         end = time.time()
         self.logger.info(

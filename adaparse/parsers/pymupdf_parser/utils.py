@@ -27,17 +27,18 @@ def safe_doc_open(
         if doc is None:
             ...  # fallback
     """
-    p = Path(path) if not isinstance(path, Path) else path
-    if not p or not p.exists() or not p.is_file():
+    path = Path(path)
+    if not path or not path.exists() or not path.is_file():
         if logger:
-            logger.warning(f"safe_doc_open: not a readable file: {p}")
+            logger.warning(f"safe_doc_open: not a readable file: {path}")
         return None
     try:
-        doc = pymupdf.open(p.as_posix(), **open_kwargs)
+        doc = pymupdf.open(str(path), **open_kwargs)
+        logger.warning(f"safe_doc_open: WORKED! {path}")
         return doc
     except Exception as e:
         if logger:
-            logger.warning(f"safe_doc_open: failed to open {p}: {e}")
+            logger.warning(f"safe_doc_open: failed to open {path}: {e}")
         return None
 
 

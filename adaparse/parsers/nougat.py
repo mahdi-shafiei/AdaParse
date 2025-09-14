@@ -105,8 +105,8 @@ class NougatParser(BaseParser):
         self.config = config
 
         # DEBUG
-        print('\n\nself.config')
-        print(self.config)
+        ##print('\n\nself.config')
+        #print(self.config)
 
         # load model/processor
         model = VisionEncoderDecoderModel.from_pretrained(self.config.checkpoint,
@@ -135,6 +135,9 @@ class NougatParser(BaseParser):
         # device/dtype
         self.device = next(self.model.parameters()).device
         self.dtype  = next(self.model.parameters()).dtype
+
+        # DEBUG
+        self.logger.info(f'self.device: {self.device}')
 
         self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
@@ -249,13 +252,10 @@ class NougatParser(BaseParser):
             start = time.time()
             # inference loop
             for sample, is_last_page in dataloader:
-                print(f"Sample: {time.time()}")
                 # encoder:
                 encoded = self.processor(images=sample,
                                          return_tensors="pt").to(device=self.device,
                                                                  dtype=self.dtype)
-                # append
-                img_+= len(encoded)
 
                 # decoder: generate from full model
                 decoder_output = self.model.generate(pixel_values=encoded.pixel_values,
@@ -266,10 +266,19 @@ class NougatParser(BaseParser):
                                                      bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                                                      stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])
                                                      )
+                # DEBUG
+                print()
+                print(f'decoder_output : {decoder_output}')
+                print()
 
                 # post-processing
                 processed_doc_output = process_decoder_output(decoder_output=decoder_output,
                                                               tokenizer=self.processor.tokenizer)
+
+                # DEBUG
+                print()
+                print(f'processed_doc_output : {processed_doc_output}')
+                print()
 
                 # append
                 model_doc_outputs.append((processed_doc_output, is_last_page))

@@ -18,10 +18,10 @@ export NO_ALBUMENTATIONS_UPDATE="${NO_ALBUMENTATIONS_UPDATE-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE-1}"
 
-# FOXTROT
+# 6) conda environment
 conda activate adaparse3
 
-# 6) parsl interchange shim once
+# 7) parsl interchange shim once
 mkdir -p "$HOME/bin"
 cat > "$HOME/bin/interchange.py" <<'PY'
 #!/usr/bin/env python3
@@ -30,7 +30,7 @@ sys.exit(runpy.run_module("parsl.executors.high_throughput.interchange", run_nam
 PY
 chmod +x "$HOME/bin/interchange.py"
 
-# 7) validation
+# 8) validation
 echo "=== PATH ==="
 echo "$PATH"
 echo "=== PYTHONPATH ==="

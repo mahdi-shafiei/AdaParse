@@ -1,5 +1,5 @@
 # The directory containing the pdfs to convert
-pdf_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/input/small-pdf-dataset
+pdf_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/input/languages
 
 # The directory to place the converted pdfs in
 out_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/output/nougat

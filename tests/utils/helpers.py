@@ -50,6 +50,19 @@ def get_nougat_checkpoint() -> Path | None:
     if env_path:
         load_env_file(env_path)
 
+    checkpoint_path = os.environ.get('NOUGAT_CHECKPOINT')
+    if checkpoint_path:
+        return Path(checkpoint_path)
+    return None
+
+def get_adaparse_checkpoint() -> Path | None:
+    """Get AdaParse (regressor) checkpoint path from environment."""
+    # Load env file from parent directory of tests
+    test_dir = Path(__file__).parent
+    env_path = find_env_file(test_dir)
+    if env_path:
+        load_env_file(env_path)
+
     checkpoint_path = os.environ.get('ADAPARSE_CHECKPOINT')
     if checkpoint_path:
         return Path(checkpoint_path)

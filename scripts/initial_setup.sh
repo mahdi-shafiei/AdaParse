@@ -26,6 +26,8 @@ SANITY="${UTILS_DIR}/check_sanity.sh"
 IMPORT="${UTILS_DIR}/data_import.sh"
 RENDER="${UTILS_DIR}/render_config.sh"
 DL_NOUGAT="${REPO_ROOT}/scripts/weights/download_nougat_checkpoint.sh"
+# TODO
+DL_ADAPARSE="${REPO_ROOT}/scripts/weights/download_adaparse_checkpoint.sh"
 
 # --- Utilities ---
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -182,6 +184,14 @@ echo "=== DIRECTORIES CREATED ==="
 printf "%s\n" "$INPUT_DIR" "$OUT_ADAPARSE" "$OUT_PYMUPDF" "$OUT_PYPDF" "$OUT_NOUGAT"
 echo
 
+# --- AdaParse meta dirs ---
+ADAPARSE_CHECKPOINT="${PROJECT_PATH}/meta/adaparse/checkpoint"
+mkdir -p "$ADAPARSE_CHECKPOINT"
+
+echo "=== ADAPARSE META DIRS ==="
+printf "%s\n" "$ADAPARSE_CHECKPOINT"
+echo
+
 # --- Nougat meta dirs ---
 NOUGAT_CHECKPOINT="${PROJECT_PATH}/meta/nougat/checkpoint"
 NOUGAT_MMD_OUT="${PROJECT_PATH}/meta/nougat/mmd"
@@ -207,6 +217,11 @@ echo
 # --- Download Nougat checkpoint ---
 echo "=== NOUGAT CHECKPOINT DOWNLOAD ==="
 bash "$DL_NOUGAT" "$NOUGAT_CHECKPOINT"
+echo
+
+# --- Download Adaparse checkpoint ---
+echo "=== ADAPARSE CHECKPOINT DOWNLOAD ==="
+bash "$DL_ADAPARSE" "$ADAPARSE_CHECKPOINT"
 echo
 
 # --- Render parser configs (capture BOTH assignments) ---
@@ -241,7 +256,8 @@ ADAPARSE_USER_NAME=$USER_NAME
 ADAPARSE_PROJECT_NAME=${PROJECT_NAME:-}
 ADAPARSE_BASE_PATH=$BASE_PATH
 ADAPARSE_PROJECT_ROOT=$PROJECT_PATH
-ADAPARSE_CHECKPOINT=$NOUGAT_CHECKPOINT
+ADAPARSE_CHECKPOINT=$ADAPARSE_CHECKPOINT
+NOUGAT_CHECKPOINT=$NOUGAT_CHECKPOINT
 DATA_TEST_PATH=$INPUT_DIR
 PYMUPDF_TEST_CONFIG=$PYMUPDF_TEST_CONFIG
 NOUGAT_TEST_CONFIG=$NOUGAT_TEST_CONFIG

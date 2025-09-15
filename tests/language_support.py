@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Tuple
 import pytest
 from rapidfuzz import fuzz
 
-from tests.utils.helpers import get_nougat_checkpoint
+from tests.utils.helpers import get_nougat_checkpoint, get_adaparse_checkpoint
 
 # Add the project root to sys.path to import adaparse modules
 project_root = Path(__file__).parent.parent
@@ -23,7 +23,7 @@ from adaparse.parsers.adaparse import AdaParse, AdaParseConfig
 
 # Test configuration
 PDF_PATH = "./tests/data/groundtruth/languages/languages.pdf"
-GROUNDTRUTH_PATH = "./tests/data/groundtruth/multilingual.mmd"
+GROUNDTRUTH_PATH = "./tests/data/groundtruth/languages.mmd"
 PAGE_SEPARATOR = "<><><><><><>NEWPAGE<><><><><><>"
 SIMILARITY_THRESHOLD = 0.75  # 75% similarity threshold
 MOCK_WEIGHTS_PATH = "./tests/mock_weights"  # Mock path for regression weights
@@ -36,56 +36,6 @@ LANGUAGES = ['ENG', 'SPA', 'DEU', 'JPN', 'FRA', 'POR', 'RUS', 'ITA', 'NLD', 'POL
 
 # Regex for parsing env file assignments
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=\s*(.*)\s*$")
-
-
-def load_env_file(path: Path) -> None:
-    """Load environment variables from .env file."""
-    if not path or not path.exists():
-        return
-
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        m = _ASSIGN.match(line)
-        if not m:
-            continue
-        k, v = m.group(1), m.group(2)
-        # Handle quoted values
-        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
-            v = v[1:-1]
-        else:
-            # Strip trailing inline comment on unquoted values
-            if " #" in v:
-                v = v.split(" #", 1)[0].rstrip()
-        os.environ[k] = os.path.expanduser(os.path.expandvars(v))
-
-
-def find_env_file(start: Path) -> Path | None:
-    """Find .adaparse.env file by searching upwards from start directory."""
-    p = start.resolve()
-    while True:
-        cand = p / ENV_BASENAME
-        if cand.exists():
-            return cand
-        if p.parent == p:
-            return None
-        p = p.parent
-
-
-def get_nougat_checkpoint() -> Path | None:
-    """Get Nougat checkpoint path from environment."""
-    # Load env file from parent directory of tests
-    test_dir = Path(__file__).parent
-    env_path = find_env_file(test_dir)
-    if env_path:
-        load_env_file(env_path)
-
-    checkpoint_path = os.environ.get('ADAPARSE_CHECKPOINT')
-    if checkpoint_path:
-        return Path(checkpoint_path)
-    return None
-
 
 class TestLanguageSupport:
     """Test class for multilingual document parsing support."""
@@ -180,12 +130,6 @@ class TestLanguageSupport:
             metadata = doc.get('metadata', {})
             page_indices = metadata.get('page_char_idx', [])
 
-            # DEBUG
-            print(f'page_indices : {page_indices}')
-            print(f'full_text : {full_text}')
-            print(f'documents : {documents}')
-            # - - - - -
-
             # Split text into pages
             pages = self._split_text_by_pages(full_text, page_indices)
 
@@ -279,18 +223,6 @@ class TestLanguageSupport:
             # Parse PDF
             pages, parse_metadata, documents = self._parse_with_error_handling(parser, self.pdf_path)
 
-            # CHECK
-            print('type(pages)')
-            print(type(pages))
-            print('pages : ')
-            print(pages)
-            print('= = = = =')
-            #print('parse_metadata')
-            #print(parse_metadata)
-
-            breakpoint()
-            # - - - -
-
             if 'error' in parse_metadata:
                 pytest.skip(f"Nougat parsing failed: {parse_metadata['error']}")
 
@@ -323,16 +255,19 @@ class TestLanguageSupport:
             # Get checkpoint from environment
             nougat_checkpoint = get_nougat_checkpoint()
             if not nougat_checkpoint or not nougat_checkpoint.exists():
+                pytest.skip(f"Nougat checkpoint not found. Set NOUGAT_CHECKPOINT in .adaparse.env")
+            adaparse_checkpoint = get_adaparse_checkpoint()
+            if not nougat_checkpoint or not nougat_checkpoint.exists():
                 pytest.skip(f"AdaParse checkpoint not found. Set ADAPARSE_CHECKPOINT in .adaparse.env")
 
             # Check for mock weights path
-            if not Path(MOCK_WEIGHTS_PATH).exists():
-                pytest.skip(f"AdaParse weights not found: {MOCK_WEIGHTS_PATH}")
+            if not Path(adaparse_checkpoint).exists():
+                pytest.skip(f"AdaParse weights not found: {adaparse_checkpoint}")
 
             # Setup parser with environment checkpoint
             config = AdaParseConfig(
                 checkpoint=nougat_checkpoint,
-                weights_path=Path(MOCK_WEIGHTS_PATH),
+                weights_path=adaparse_checkpoint,
                 batchsize=1,
                 num_workers=1,
                 nougat_logs_path=Path("./tests/logs"),
@@ -372,7 +307,7 @@ class TestLanguageSupport:
         """Generate a comparison summary of all parser results."""
         results_summary = {}
 
-        # Collect results from all parsers that ran successfully
+        # collect results from all parsers that ran successfully
         if hasattr(self, 'pymupdf_results'):
             results_summary['PyMuPDF'] = self.pymupdf_results
         if hasattr(self, 'pypdf_results'):
@@ -385,7 +320,7 @@ class TestLanguageSupport:
         if not results_summary:
             pytest.skip("No parser results available for comparison")
 
-        # Print comprehensive comparison
+        # print comprehensive comparison
         print(f"\n{'='*60}")
         print("MULTILINGUAL PARSING COMPARISON SUMMARY")
         print(f"{'='*60}")
@@ -401,7 +336,7 @@ class TestLanguageSupport:
             print(f"  Supported languages: {results['supported_languages']}")
             print(f"  Unsupported languages: {results['unsupported_languages']}")
 
-        # Find best performing parser
+        # find best performing parser
         if results_summary:
             best_parser = max(results_summary.items(), key=lambda x: x[1]['support_percentage'])
             print(f"\nBest performing parser: {best_parser[0]} ({best_parser[1]['support_percentage']:.1f}% support)")
@@ -410,7 +345,6 @@ class TestLanguageSupport:
 
         # Basic assertion that at least one parser worked
         assert len(results_summary) > 0, "No parsers produced valid results"
-
 
 # Utility function to setup mock files if needed
 def setup_mock_files():

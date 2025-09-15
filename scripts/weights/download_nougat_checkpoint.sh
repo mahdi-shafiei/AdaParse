@@ -30,6 +30,15 @@ fi
 
 mkdir -p "${TARGET_DIR}"
 
+# --- Check Availability ---
+PYTHON_BIN="${PYTHON_BIN:-$(command -v python || command -v python3 || echo python)}"
+if ! command -v huggingface-cli >/dev/null 2>&1 && \
+   ! "${PYTHON_BIN}" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('huggingface_hub') else 1)"; then
+  echo "[ERR] Neither 'huggingface-cli' nor 'huggingface_hub' is available in ${PYTHON_BIN}."
+  echo "      Load module/conda env & try: ${PYTHON_BIN} -m pip install -U 'huggingface_hub[cli]'"
+  exit 3
+fi
+
 # --------------------------------------------------------------------
 # Pick a downloader that does NOT use ~/.local/bin/hf
 # 1) Prefer 'huggingface-cli' (worked for you)

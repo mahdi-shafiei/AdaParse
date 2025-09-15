@@ -26,7 +26,6 @@ SANITY="${UTILS_DIR}/check_sanity.sh"
 IMPORT="${UTILS_DIR}/data_import.sh"
 RENDER="${UTILS_DIR}/render_config.sh"
 DL_NOUGAT="${REPO_ROOT}/scripts/weights/download_nougat_checkpoint.sh"
-# TODO
 DL_ADAPARSE="${REPO_ROOT}/scripts/weights/download_adaparse_checkpoint.sh"
 
 # --- Utilities ---
@@ -213,6 +212,29 @@ WORKER_INIT_CMD="${RAW_CMD//<ABS_PATH_TO_standup_aurora.sh>/$ABS_STANDUP_AURORA}
 [[ -n "$WORKER_INIT_CMD" ]] || die "No worker_init for machine '$MACHINE' in $ENV_MAP_PATH"
 echo "[INFO] worker_init resolved for $MACHINE: $WORKER_INIT_CMD"
 echo
+
+# --- Internet connectivity check ---
+echo "=== INTERNET CHECK ==="
+INET="${UTILS_DIR}/inet_access.sh"
+if [[ -x "$INET" ]]; then
+  # STRICT_INET=1 to require all targets; default: pass if any target works.
+  if ! "$INET" ${STRICT_INET:+--strict} --timeout "${INET_TIMEOUT:-5}"; then
+    echo "[WARN] Internet check failed. Downloads may fail."
+    # If you prefer to hard-fail here, uncomment the next line:
+    # die "No internet connectivity to required hosts."
+  else
+    echo "[INFO] Internet access looks good."
+  fi
+else
+  echo "[WARN] inet_access.sh not found or not executable at: $INET"
+fi
+echo
+
+# --- HF Hub tuning for HPC links ---
+export HF_HUB_DOWNLOAD_TIMEOUT=30
+export HF_HUB_DOWNLOAD_RETRY=2
+export HF_HUB_ENABLE_HF_TRANSFER=0
+export HF_HUB_DOWNLOAD_THREADS=2
 
 # --- Download Nougat checkpoint ---
 echo "=== NOUGAT CHECKPOINT DOWNLOAD ==="

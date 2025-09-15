@@ -53,9 +53,15 @@ if [[ "$MACHINE" =~ ^(polaris|sophia|aurora)$ ]]; then
   )
 
   if [[ ${#projs[@]} -gt 0 ]]; then
+    {
     echo "Projects for ${USER_NAME}:"
-    i=1; for p in "${projs[@]}"; do printf "  [%d] %s\n" "$i" "$p"; ((i++)); done
+    i=1
+    for p in "${projs[@]}"; do
+        printf "  [%d] %s\n" "$i" "$p"
+        ((i++))
+    done
     echo
+    } >&2
     read -r -p "Pick project # or type name (or C/No/N/Q to cancel): " choice_raw
     choice="$(printf '%s' "$choice_raw" | tr '[:upper:]' '[:lower:]')"
     if [[ "$choice" =~ $cancel ]]; then
@@ -97,17 +103,21 @@ if [[ "$MACHINE" == "local" ]]; then
   done
 fi
 
-# Build command (fully quoted)
+# Build command (fully quoted): argv as an array (no manual quoting)
 # shellcheck disable=SC2059
-printf -v CMD "%q " "$SCRIPT" --user_name "$USER_NAME" --machine "$MACHINE"
-[[ -n "$project" ]] && printf -v CMD "%s%q " "$CMD" --project_name "$project"
-[[ -n "$base"    ]] && printf -v CMD "%s%q " "$CMD" --base_path "$base"
+CMD=( "$SCRIPT" --user_name "$USER_NAME" --machine "$MACHINE" )
+[[ -n "$project" ]] && CMD+=( --project_name "$project" )
+[[ -n "$base"    ]] && CMD+=( --base_path "$base" )
 
-echo "$CMD"
+# Print a safely shell-quoted one-liner
+printf '%q ' "${CMD[@]}"; echo
 
 if [[ $DO_EXEC -eq 1 ]]; then
-  echo
-  echo "[INFO] About to exec:"
-  echo "  $CMD"
-  exec bash -lc "$CMD"
+  {
+    echo
+    echo "[INFO] About to exec:"
+    printf '  '; printf '%q ' "${CMD[@]}"; echo
+    } >&2
+    # Exec the exact same argv (quoted as a single command line for bash -lc)
+    exec bash -lc "$(printf '%q ' "${CMD[@]}")"
 fi

@@ -248,7 +248,8 @@ class TestLanguageSupport:
         except Exception as e:
             pytest.skip(f"Nougat parser setup failed: {e}")
 
-    @pytest.mark.skipif(not Path(PDF_PATH).exists(), reason=f"Test PDF not found: {PDF_PATH}")
+    # @pytest.mark.skipif(not Path(PDF_PATH).exists(), reason=f"Test PDF not found: {PDF_PATH}")
+    @pytest.mark.skip(reason="Temporarily disabling AdaParse test until new weights are in")
     def test_adaparse_language_support(self):
         """Test AdaParse parser language support."""
         try:

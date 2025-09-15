@@ -58,13 +58,15 @@ def move_to_custom_device(model, bf16: bool = True):
 
 def build_doc_and_indices(pages: list[str], sentinel: str = "\uE000") -> tuple[str, list[int]]:
     """
-    Join text via `sentinel` char, `uE000` by default
+    Join text via `sentinel` char (`uE000` by default) and normalize page breaks
     """
     assert isinstance(sentinel, str) and len(sentinel) == 1, "sentinel must be a single character"
     joined = sentinel.join(pages)
+
     # apply text normalization
     normalized = re.sub(r"\n{3,}", "\n\n", joined).strip()
     parts = normalized.split(sentinel)
+
     # remove sentinels while recording start offsets
     starts, cur = [], 0
     for part in parts:

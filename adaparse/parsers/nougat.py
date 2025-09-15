@@ -69,17 +69,13 @@ class NougatParserConfig(BaseParserConfig):
     def validate_ckpt_path_exists(cls, value: Path) -> Path:
         """Check if the directory exists."""
         if not value.exists():
-            # LEGACY
-            #from nougat.utils.checkpoint import get_checkpoint
-
             print(
                 f'Checkpoint not found in {value}.'
-                'Rebuild AdaParse via `source ./scripts/initial_setup.sh` or '
+                'Rebuild Repo via `source ./scripts/initial_setup.sh` or '
                 'download weights directly by running'
                 '`source ./scripts/weights/download_nougat_checkpoint.sh`'
             )
-            # LEGACY
-            # value = get_checkpoint(value, model_tag='0.1.0-base')
+
         return value
 
 
@@ -103,10 +99,6 @@ class NougatParser(BaseParser):
 
         # set config
         self.config = config
-
-        # DEBUG
-        ##print('\n\nself.config')
-        #print(self.config)
 
         # load model/processor
         model = VisionEncoderDecoderModel.from_pretrained(self.config.checkpoint,
@@ -136,10 +128,11 @@ class NougatParser(BaseParser):
         self.device = next(self.model.parameters()).device
         self.dtype  = next(self.model.parameters()).dtype
 
+        # logger setup
+        self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
+
         # DEBUG
         self.logger.info(f'self.device: {self.device}')
-
-        self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
         # Log the output data information
         if self.config.mmd_out is not None:
@@ -227,20 +220,14 @@ class NougatParser(BaseParser):
 
         # dataloader
         dataloader = DataLoader(ConcatDataset(datasets), **dl_kwargs)
-        # - log
-        self.logger.info(f"\nprint(len(dataloader)): {len(dataloader)}")
 
         documents: List[Dict[str, Any]] = []
         predictions: List[str] = []
-        file_index = 0
-        page_num = 0
         model_doc_outputs = []
 
         # - - - - - - - - - - - - - - - -
         # 1st pass: pure Nougat inference
         # - - - - - - - - - - - - - - - -
-        img_ = 0
-        print(f"Time: {time.time()}\nBefore amp_infer_context()")
         # adaptive context
         with amp_infer_context(model=self.model):
             # compile model
@@ -266,42 +253,38 @@ class NougatParser(BaseParser):
                                                      bad_words_ids=[[self.processor.tokenizer.unk_token_id]],
                                                      stopping_criteria=StoppingCriteriaList([StoppingCriteriaScores()])
                                                      )
-                # DEBUG
-                print()
-                print(f'decoder_output : {decoder_output}')
-                print()
 
                 # post-processing
                 processed_doc_output = process_decoder_output(decoder_output=decoder_output,
                                                               tokenizer=self.processor.tokenizer)
 
-                # DEBUG
-                print()
-                print(f'processed_doc_output : {processed_doc_output}')
-                print()
-
                 # append
                 model_doc_outputs.append((processed_doc_output, is_last_page))
 
-        # appendls
+        # time
         end = time.time()
         # - log
         self.logger.info(
-            f'[TIME] 1st pass (Nougat Inference): {end - start:.2f}[s]\nFor {img_} images'
+            f'[TIME] 1st pass (Nougat Inference): {end - start:.2f}[s]'
         )
 
         # - - - - - - - - - - - - - - - -
         # 2nd pass: (optional) fill-in
         # - - - - - - - - - - - - - - - -
+        # must initialize doc, page_num, file_index here
+        file_index = 0
+        doc = None
+        page_num = 0
+
+        # 1st: loop over batches of documents (not documents themselves)
         start = time.time()
+        for _, (doc_output, is_last_page_file_name) in enumerate(model_doc_outputs):
+            # DEBUG
+            self.logger.info(
+                f'datasets[file_index].name: {datasets[file_index].name}'
+            )
 
-        # document-loop
-        for _, (doc_output, is_last_page) in enumerate(model_doc_outputs):
-            # fill-in model output
-            page_num = 0
-            doc = None
-
-            # page loop
+            # 2nd: page loop
             for j, page_output in enumerate(doc_output['predictions']):
                 # first page only
                 if page_num == 0:
@@ -314,7 +297,8 @@ class NougatParser(BaseParser):
 
                 # every page
                 # - detect Nougat failure
-                if (('MISSING_PAGE' in page_output) or (len(page_output) < 20)) and (doc is not None):
+                page_likely_subpar = (('MISSING_PAGE' in page_output) or (len(page_output) < 20))
+                if self.config.fill_missing_pages and page_likely_subpar and (doc is not None):
                     prev_len = len(page_output)
                     page_output_tmp = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
                     doc_parser_name = 'nougat/pymupdf'
@@ -323,18 +307,15 @@ class NougatParser(BaseParser):
                         page_output = page_output_tmp
                 # - formatting (source-independent)
                 if self.config.markdown:
-                    prev_len = len(page_output)
                     page_output = markdown_compatible(page_output)
-                    new_len = len(page_output)
-                    # - -
 
                 # append
                 predictions.append(page_output)
 
                 # last page only
-                if is_last_page[j]:
-                    # - -
-                    out, page_indices = build_doc_and_indices(predictions)
+                if is_last_page_file_name[j]:
+                    # process
+                    joined_text, page_indices = build_doc_and_indices(predictions)
                     # - close doc
                     if self.config.fill_missing_pages and (doc is not None):
                         safe_doc_close(doc, self.logger)
@@ -345,8 +326,8 @@ class NougatParser(BaseParser):
 
                     # write document
                     document = {
-                        'path': str(is_last_page[j]),
-                        'text': out,
+                        'path': str(is_last_page_file_name[j]),
+                        'text': joined_text,
                         'metadata': metadata,
                         'parser': doc_parser_name,
                     }
@@ -357,19 +338,23 @@ class NougatParser(BaseParser):
                         # - -
                         out_path = (
                             self.config.mmd_out
-                            / Path(is_last_page[j]).with_suffix('.mmd').name
+                            / Path(is_last_page_file_name[j]).with_suffix('.mmd').name
                         )
                         out_path.parent.mkdir(parents=True, exist_ok=True)
-                        out_path.write_text(out, encoding='utf-8')
+                        out_path.write_text(joined_text, encoding='utf-8')
 
                     # reset
-                    predictions = []
-                    page_num = 0
                     file_index += 1
+                    # reset page
+                    page_num = 0
                 else:
-                    # - increment page
-                    page_num+=1
+                    # increment
+                    page_num += 1
 
+            # - batch completed
+        # - dataset finished
+
+        # - loop done
         end = time.time()
         self.logger.info(
             f'[TIME] 2nd pass (Fill-in): {end - start:.2f}[s].'

@@ -344,4 +344,4 @@ if __name__ == '__main__':
 
     # Distribute the input files across processes
     with ParslPoolExecutor(parsl_config) as pool:
-        list(pool.map(worker_fn, batched_files))   # <- bug here
+        list(pool.map(worker_fn, batched_files))

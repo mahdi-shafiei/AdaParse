@@ -12,7 +12,7 @@ parser_settings:
   # The name of the parser to use
   name: adaparse
   # Max. proportion of high-quality parser (Nougat): throughput-sensitive
-  alpha: 0.05
+  alpha: 0.15
 
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
   batchsize: 5
@@ -35,7 +35,7 @@ parser_settings:
 
   # The AdaParse classifier settings
   # The HF identifier or path to the fine-tuned regression model
-  weights_path: 7shoe/adaparse-scibert-uncased
+  weights_path: 7shoe/adaparse-specter-docwise
   # The batch size for the classifier.
   batch_size: 256
   # The maximum length of the input text (in characters).
@@ -60,4 +60,4 @@ compute_settings:
   # The HPC queue to submit to
   queue: debug
   # The amount of time to request for your job
-  walltime: 00:12:00
+  walltime: 00:15:00

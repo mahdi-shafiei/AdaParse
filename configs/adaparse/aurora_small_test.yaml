@@ -35,7 +35,7 @@ parser_settings:
 
   # The AdaParse classifier settings
   # The HF identifier or path to the fine-tuned regression model
-  weights_path: 7shoe/adaparse-scibert-uncased
+  weights_path: 7shoe/adaparse-scibert-uncased #7shoe/adaparse-specter-docwise
   # The batch size for the classifier.
   batch_size: 256
   # The maximum length of the input text (in characters).

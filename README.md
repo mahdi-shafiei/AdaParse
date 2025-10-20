@@ -42,6 +42,7 @@ git clone git@github.com:7shoe/AdaParse.git
 cd AdaParse
 
 module load frameworks
+conda activate adaparse
 pip install --upgrade pip setuptools wheel
 pip install -e .
 export PATH="$HOME/.local/aurora/frameworks/2024.2.1_u1/bin:$PATH"

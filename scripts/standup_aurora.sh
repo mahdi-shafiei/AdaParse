@@ -24,8 +24,8 @@ export NO_ALBUMENTATIONS_UPDATE="${NO_ALBUMENTATIONS_UPDATE-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE-1}"
 
-# 6) conda environment
-conda activate adaparse
+# 6) conda environment (only daparse3 is built correctly)
+conda activate adaparse10
 # - sanitize
 unset PYTHONPATH
 export PYTHONNOUSERSITE=1

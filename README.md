@@ -31,16 +31,20 @@ conda activate adaparse
 git clone git@github.com:7shoe/AdaParse.git
 cd AdaParse
 pip install --upgrade pip setuptools wheel
-pip install -e .
+pip install -e '.[transformers]' # pull transformers too
 ```
 If you plan on using [Tesseract](https://github.com/tesseract-ocr/tesseract?tab=readme-ov-file#installing-tesseract), additional installation steps are required.
 
 ## Aurora
 The steps below enable any of the parsers.
 ```bash
+# one-time
+module load frameworks
+conda create -n adaparse --clone /opt/aurora/25.190.0/frameworks/aurora_frameworks-2025.2.0
 git clone git@github.com:7shoe/AdaParse.git
 cd AdaParse
 
+# use
 module load frameworks
 conda activate adaparse
 pip install --upgrade pip setuptools wheel

@@ -4,10 +4,10 @@
 pdf_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/input/small-pdf-dataset
 
 # The directory to place the converted pdfs in
-out_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/output/pymupdf
+out_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/output/pymupdf_reference
 
 # PDFs rather than zipped PDFs
-iszip: false
+iszip: true
 
 # The settings for the pdf parser
 parser_settings:

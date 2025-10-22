@@ -17,7 +17,6 @@ __all__ = [
     'PyMuPDFParserConfig',
 ]
 
-
 class PyMuPDFParserConfig(BaseParserConfig):
     """Settings for the PyMuPDF-PDF parser."""
 
@@ -39,13 +38,16 @@ class PyMuPDFParser(BaseParser):
         return match.group(2) if match else ''
 
     @exception_handler(default_return=None)
-    def parse_pdf(self, pdf_path: str) -> tuple[str, dict[str, Any]] | None:
+    def parse_pdf(self,
+                  pdf_path: str) -> tuple[str, dict[str, Any]] | None:
         """Parse a PDF file.
 
         Parameters
         ----------
         pdf_path : str
             Path to the PDF file to convert.
+        pagewise_flag: bool
+             Indicates if the page texts are returned as a list[str] per document, or merged into single str.
 
         Returns
         -------
@@ -55,8 +57,8 @@ class PyMuPDFParser(BaseParser):
         """
         # open pdf
         with pymupdf.open(pdf_path) as doc:
-            # Scrape text
-            text_list = []
+            # scrape text
+            page_texts_list = []
             # track char page indices
             cumm_idx = 0
             page_indices = [0]
@@ -65,7 +67,7 @@ class PyMuPDFParser(BaseParser):
             for page in doc:
                 # - page's text
                 page_txt = page.get_text()
-                text_list.append(page_txt)
+                page_texts_list.append(page_txt)
                 # - char indices
                 cumm_idx += len(page_txt) + len('\n')
                 page_indices.append(cumm_idx)
@@ -73,12 +75,12 @@ class PyMuPDFParser(BaseParser):
             # remove trailing index
             page_indices = page_indices[:-1]
 
-            full_text = '\n'.join(text_list)
+            full_text = '\n'.join(page_texts_list)
 
             # Get first page (as a proxy for `abstract`)
-            first_page_text = text_list[0] if len(text_list) > 0 else ''
+            first_page_text = page_texts_list[0] if len(page_texts_list) > 0 else ''
 
-            # Metadata (available to PyMuPDF)
+            # metadata (available to PyMuPDF)
             title = doc.metadata.get('title', '')
             authors = doc.metadata.get('author', '')
             creationdate = doc.metadata.get('creationDate', '')
@@ -92,7 +94,7 @@ class PyMuPDFParser(BaseParser):
                 else ''
             )
 
-            # Assemble the metadata
+            # assemble the metadata
             out_meta = {
                 'title': title,
                 'authors': authors,
@@ -101,8 +103,9 @@ class PyMuPDFParser(BaseParser):
                 'doi': doi,
                 'producer': prod,
                 'format': form,
-                'first_page': first_page_text,
                 'abstract': abstract,
+                'first_page': first_page_text,
+                'page_text_list': page_texts_list,
                 'page_char_idx': page_indices,
             }
 
@@ -110,9 +113,12 @@ class PyMuPDFParser(BaseParser):
             return full_text, out_meta
 
     @exception_handler(default_return=None)
-    def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:
+    def parse(self,
+              pdf_files: list[str]) -> list[dict[str, Any]] | None:
         """Parse a list of pdf files and return the parsed data."""
+        # list[str] (by_doc) or list[list[str]] (by_page)
         documents = []
+
         # Process each PDF
         for pdf_file in pdf_files:
             # Parse the PDF
@@ -133,6 +139,8 @@ class PyMuPDFParser(BaseParser):
                 'metadata': metadata,
                 'parser': self.config.name,
             }
+
+            # text & meta
             documents.append(document)
 
         return documents

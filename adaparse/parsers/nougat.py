@@ -6,7 +6,7 @@ import time
 from functools import partial
 from pathlib import Path
 from typing import Any
-from typing import Literal, List, Dict
+from typing import Literal, List, Dict, Optional
 from pydantic import field_validator
 from transformers import StoppingCriteriaList
 
@@ -44,7 +44,7 @@ class NougatParserConfig(BaseParserConfig):
     # The directory to write optional mmd outputs along with jsonls.
     mmd_out: Path | None = None
     # Override pre-existing parsed outputs.
-    recompute: bool = False
+    recompute: bool = True
     # Fill-in of failed/empty pages via PyMuPDF (False implies pure Nougat)
     fill_missing_pages: bool = False
     # Use float32 (False: bfloat32)
@@ -97,6 +97,9 @@ class NougatParser(BaseParser):
         from transformers import VisionEncoderDecoderModel
         from transformers import NougatProcessor
 
+        # logger setup
+        self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
+
         # set config
         self.config = config
 
@@ -120,6 +123,13 @@ class NougatParser(BaseParser):
         if use_ipex:
             model = ipex.optimize(model, dtype=model.dtype)
 
+        # DEBUG
+        self.logger.info(f'model                     : {model}')
+        self.logger.info(f'hasattr(torch, `xpu`)     : {hasattr(torch, "xpu")}')
+        self.logger.info(f'torch.xpu.is_available()  : {torch.xpu.is_available()}')
+        self.logger.info(f'use_ipex                  : {use_ipex}')
+        self.logger.info(f'bf16                      : {not(self.config.full_precision)}')
+
         # assign
         self.model = model
         self.processor = processor
@@ -127,9 +137,6 @@ class NougatParser(BaseParser):
         # device/dtype
         self.device = next(self.model.parameters()).device
         self.dtype  = next(self.model.parameters()).dtype
-
-        # logger setup
-        self.logger = setup_logging('adaparse_nougat', config.nougat_logs_path)
 
         # DEBUG
         self.logger.info(f'self.device: {self.device}')
@@ -141,7 +148,9 @@ class NougatParser(BaseParser):
             self.logger.info('`mmd_out` not specified, will not write markdown files.')
 
     @exception_handler(default_return=None)
-    def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:  # noqa: PLR0912, PLR0915
+    def parse(self,
+              pdf_files: list[str],
+              pages_lists: Optional[List[Optional[List[int]]]] = None) -> list[dict[str, Any]] | None:
         """Parse a PDF file and extract markdown.
 
         Parameters
@@ -177,13 +186,27 @@ class NougatParser(BaseParser):
         # - combine
         prepared_arg_triplet = (align_long_axis, input_size, random_padding)
 
+        # document-wise (no pages_lists for subsetting provided)
+        if pages_lists is None:
+            pages_lists = [None] * len(pdfs)
+            pagewise_flag = False
+        else:
+            pagewise_flag = True
+            # check if page lists are consistent
+            if len(pages_lists) != len(pdfs):
+                raise ValueError("len(pages_lists) must equal len(pdf_files)")
+            for i, lst in enumerate(pages_lists):
+                if not lst:
+                    raise ValueError(f"pages_lists[{i}] must be non-empty")
+
         # dataset
         datasets: List[LazyDataset] = []
-        for pdf in pdfs:
+        for pdf, pages in zip(pdfs, pages_lists):
             if not pdf.exists():
                 self.logger.warning(f'Could not find {pdf}. Skipping.')
                 continue
 
+            # Markdown output
             if self.config.mmd_out is not None:
                 out_path = self.config.mmd_out / pdf.with_suffix('.mmd').name
                 if out_path.exists() and not self.config.recompute:
@@ -195,8 +218,9 @@ class NougatParser(BaseParser):
             try:
                 # dataset
                 dataset = LazyDataset(
-                    pdf,
-                    partial(prepare_input_sc, prep_args=prepared_arg_triplet),
+                    pdf=pdf,
+                    prepare=partial(prepare_input_sc, prep_args=prepared_arg_triplet),
+                    pages=pages,
                 )
             except:
                 self.logger.info(f'Could not load file {pdf!s}.')
@@ -208,6 +232,7 @@ class NougatParser(BaseParser):
             return None
 
         # dataloader arguments
+        # - only shuffle=False allows reconsruction
         dl_kwargs = dict(
             batch_size=self.config.batchsize,
             pin_memory=True,
@@ -276,6 +301,10 @@ class NougatParser(BaseParser):
         doc = None
         page_num = 0
 
+        # containers for page-wise output
+        pagewise_documents: list[dict[str, dict[int, str]]] = []
+        per_file_pages = {}   # map original_page_index -> page_text
+
         # 1st: loop over batches of documents (not documents themselves)
         start = time.time()
         for _, (doc_output, is_last_page_file_name) in enumerate(model_doc_outputs):
@@ -290,58 +319,84 @@ class NougatParser(BaseParser):
                 if page_num == 0:
                     predictions=[]
                     doc_parser_name = 'nougat'
+                    if pagewise_flag:
+                        per_file_pages = {}
 
                     # open file : fill missing pages
                     if self.config.fill_missing_pages and doc is None:
                         doc = safe_doc_open(datasets[file_index].name, self.logger)
 
-                # every page
-                # - detect Nougat failure
+                # (optional) fill_missing_pages handling
                 page_likely_subpar = (('MISSING_PAGE' in page_output) or (len(page_output) < 20))
                 if self.config.fill_missing_pages and page_likely_subpar and (doc is not None):
-                    prev_len = len(page_output)
-                    page_output_tmp = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
-                    doc_parser_name = 'nougat/pymupdf'
-                    new_len = len(page_output_tmp)
-                    if new_len > prev_len:
-                        page_output = page_output_tmp
+                    if pagewise_flag:
+                        original_idx = pages_lists[file_index][page_num]
+                        fallback_text = '\n\n' + doc.load_page(original_idx).get_text() + '\n\n'
+                    else:
+                        fallback_text = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
+                    new_len = len(fallback_text)
+                    # heuristic: assign for more tokens
+                    if new_len > len(page_output):
+                        page_output = fallback_text
+                        doc_parser_name = 'nougat/pymupdf'
+
                 # - formatting (source-independent)
                 if self.config.markdown:
                     page_output = markdown_compatible(page_output)
 
-                # append
-                predictions.append(page_output)
+                # ===== Divergence: by_doc vs by_page(subset) assembly =====
+                if not pagewise_flag:
+                    # by_doc : collect strings to later join
+                    predictions.append(page_output)
+                else:
+                    # subset mode: store under ORIGINAL page index
+                    original_idx = pages_lists[file_index][page_num]  # e.g., 0,4,6
+                    per_file_pages[original_idx] = page_output
 
-                # last page only
+                # last page only / last page boundary
                 if is_last_page_file_name[j]:
-                    # process
-                    joined_text, page_indices = build_doc_and_indices(predictions)
-                    # - close doc
-                    if self.config.fill_missing_pages and (doc is not None):
-                        safe_doc_close(doc, self.logger)
-                        doc = None
+                    # by_doc
+                    if not pagewise_flag:
+                        # process
+                        joined_text, page_indices = build_doc_and_indices(predictions)
+                        # - close doc
+                        if self.config.fill_missing_pages and (doc is not None):
+                            safe_doc_close(doc, self.logger)
+                            doc = None
 
-                    # metadata
-                    metadata = {'page_char_idx': page_indices}
+                        # metadata
+                        metadata = {'page_char_idx': page_indices}
 
-                    # write document
-                    document = {
-                        'path': str(is_last_page_file_name[j]),
-                        'text': joined_text,
-                        'metadata': metadata,
-                        'parser': doc_parser_name,
-                    }
-                    documents.append(document)
+                        # write document
+                        document = {
+                            'path': str(is_last_page_file_name[j]),
+                            'text': joined_text,
+                            'metadata': metadata,
+                            'parser': doc_parser_name,
+                        }
+                        documents.append(document)
 
-                    # write explicit .mmd
-                    if self.config.mmd_out is not None:
-                        # - -
-                        out_path = (
-                            self.config.mmd_out
-                            / Path(is_last_page_file_name[j]).with_suffix('.mmd').name
-                        )
-                        out_path.parent.mkdir(parents=True, exist_ok=True)
-                        out_path.write_text(joined_text, encoding='utf-8')
+                        # write explicit .mmd in `by_doc` mode only
+                        if self.config.mmd_out is not None:
+                            # - -
+                            out_path = (
+                                self.config.mmd_out
+                                / Path(is_last_page_file_name[j]).with_suffix('.mmd').name
+                            )
+                            out_path.parent.mkdir(parents=True, exist_ok=True)
+                            out_path.write_text(joined_text, encoding='utf-8')
+
+                    # by_page: 1 dict per file
+                    else:
+                        # page-wise assembly: one dict per file
+                        ordered = dict(sorted(per_file_pages.items(), key=lambda kv: kv[0]))
+                        pagewise_documents.append({str(is_last_page_file_name[j]): ordered})
+
+                        # close if open (not used in subset mode, but harmless)
+                        if self.config.fill_missing_pages and (doc is not None):
+                            safe_doc_close(doc, self.logger)
+                            doc = None
+                        per_file_pages = None
 
                     # reset
                     file_index += 1
@@ -353,12 +408,16 @@ class NougatParser(BaseParser):
 
             # - batch completed
         # - dataset finished
-
         # - loop done
         end = time.time()
         self.logger.info(
             f'[TIME] 2nd pass (Fill-in): {end - start:.2f}[s].'
         )
 
-        # workflow return
-        return documents
+        # Return format:
+        # - by_doc : List[Dict[str, Any]]
+        # - by_page : List[Dict[str, Dict[int, str]]]
+        if not pagewise_flag:
+            return documents
+        else:
+            return pagewise_documents

@@ -1,15 +1,16 @@
-# 1) framework + oneAPI (Aurora Python)
+# 1) framework + oneAPI (Aurora Python): good
 module purge
 module load frameworks/2025.0.0.lua
 source /opt/aurora/24.347.0/oneapi/setvars.sh --force 2>/dev/null || true
 # - sanitize
-unset PYTHONPATH
-export PYTHONNOUSERSITE=1
-export PYTHONDONTWRITEBYTECODE=1
-export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+#unset PYTHONPATH
+#export PYTHONNOUSERSITE=1
+#export PYTHONDONTWRITEBYTECODE=1
+#export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
 
 # 2) user site-packages append
-#export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/2025.0.0/lib/python3.10/site-packages"
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/2025.0.0/lib/python3.10/site-packages" # ERROR
+#export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/aurora_frameworks-2025.2.0/lib/python3.10/site-packages" # seems new
 
 # 3) shims are visible first on PATH
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"

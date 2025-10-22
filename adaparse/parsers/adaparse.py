@@ -7,11 +7,13 @@ from abc import ABC
 from abc import abstractmethod
 from collections import Counter
 from pathlib import Path
-from typing import Any
-from typing import Literal
+from typing import Any, Literal, Optional, Sequence
+from itertools import chain, islice
 
+import random
 import numpy as np
 import torch
+from enum import Enum
 from pydantic import BaseModel
 from pydantic import Field
 from torch.utils.data import DataLoader
@@ -30,7 +32,10 @@ __all__ = [
     'AdaParse',
     'AdaParseConfig',
 ]
-
+class PredMode(str, Enum):
+    """Mode of prediction (regression) and hence delegation of AdaParse: by page or doc"""
+    by_doc = "by_doc"
+    by_page = "by_page"
 
 class TextDataset(Dataset):
     """Dataset for sequence regression via cls."""
@@ -40,13 +45,12 @@ class TextDataset(Dataset):
         self.texts = texts
 
     def __len__(self) -> int:
-        """Return the number of text."""
+        """Return the number of texts."""
         return len(self.texts)
 
     def __getitem__(self, idx: int) -> str:
         """Return a sequence."""
         return self.texts[idx]
-
 
 class TextRegressionConfig(BaseModel):
     """Settings for the text quality regression."""
@@ -54,8 +58,14 @@ class TextRegressionConfig(BaseModel):
     alpha: float = Field(
         description='Max. proportion of high-quality parser.',
     )
-    weights_path: Path = Field(
-        description='The path to the fine-tuned model weights.',
+    prediction_mode: PredMode = Field(
+        default=PredMode.by_doc,
+        description='Mode/granularity with which prediction/delegation occurs.',
+    )
+    weights_path: Path | None = Field(
+        default=None,
+        description='The path to the fine-tuned model weights - overwrites pred granularity.',
+
     )
     batch_size: int = Field(
         default=8,
@@ -76,21 +86,34 @@ class TextRegressionConfig(BaseModel):
 
 
 class TextRegression(ABC):
-    """Text Quality Regession Model."""
+    """Text Quality Regression Model."""
 
     def __init__(self, config: TextRegressionConfig) -> None:
         """Initialize the regression model via CLS."""
         from transformers import AutoModelForSequenceClassification
         from transformers import AutoTokenizer
 
+        # prediction model
+        if config.prediction_mode == PredMode.by_doc:
+            regr_model_name = '7shoe/adaparse-scibert-uncased' # 7shoe/adaparse-specter-docwise
+        elif config.prediction_mode == PredMode.by_page:
+            regr_model_name = '7shoe/adaparse-scibert-uncased' # 7shoe/adaparse-specter-pagewise
+        else:
+            raise ValueError("Prediction mode is either `by_doc` or `by_page`")
+
+        # weights path set
+        if config.weights_path is not None:
+            regr_model_name = config.weights_path
+            print(f"weights_path set: Overwrite `prediction_mode` and use model: {regr_model_name}")
+
         # Load the tokenizer
         tokenizer = AutoTokenizer.from_pretrained(
-            '7shoe/adaparse-scibert-uncased'
+            regr_model_name
         )
 
         # Load the base model
         model = AutoModelForSequenceClassification.from_pretrained(
-            '7shoe/adaparse-scibert-uncased', num_labels=6
+            regr_model_name, num_labels=6
         )
 
         # model to device
@@ -121,20 +144,22 @@ class TextRegression(ABC):
         ...
 
     @torch.no_grad()
-    def predict(self, text: list[str]) -> list[int]:
+    def predict(self,
+                text: list[str]) -> list[int]:
         """Quality regression on the input text.
 
         Parameters
         ----------
         text : list[str]
-            The input text to regress.
+            The input text to regress. Either List of full document texts (`by_doc`) or (flattened) page texts (`by_page`)
 
         Returns
         -------
         list[int]
             The predicted scores.
         """
-        # Truncate the text
+
+        # prediction is agnostic to page/doc-mode
         _text = [t[: self.config.max_character_length] for t in text]
 
         # Create the dataset
@@ -210,11 +235,12 @@ class NougatTextRegression(TextRegression):
         -------
         np.ndarray
             The predicted classes.
-        """  # noqa: D401
-        # Default parser
+        """
+        # default (high-throughput) parser
         parser = 'pymupdf'
 
-        # Parser ID map (same as model config)
+        # parser ID map (same as model config)
+        # - later : q!=0 as indicator to re-parse
         parser_ids = {
             'pymupdf': 0,
             'nougat': 1,
@@ -224,7 +250,7 @@ class NougatTextRegression(TextRegression):
             'tesseract': 5,
         }
 
-        # Validate parser_ids
+        # validate parser_ids
         required_keys = {parser, high_quality_parser, throughput_parser}
         missing_keys = required_keys - parser_ids.keys()
         if missing_keys:
@@ -278,7 +304,6 @@ class NougatTextRegression(TextRegression):
 
         return np.array(pred_classes)
 
-
 class AdaParseConfig(
     PyMuPDFParserConfig, NougatParserConfig, TextRegressionConfig
 ):
@@ -290,9 +315,10 @@ class AdaParseConfig(
     # Maximum proportion of Nougat parses for the job (performance parameter)
     alpha: float = 0.05
 
-    # DEV NOTE: The following are convenience properties to access the
-    # individual parser configurations (we need a flat configuration for
-    # the parser to be compatible with the warmstart registry module).
+    # Granularity of accuracy prediction (and hence delegation: by page or doc)
+    prediction_mode: PredMode = PredMode.by_doc
+
+    # convenience properties to access the configs
     @property
     def pymupdf_config(self) -> PyMuPDFParserConfig:
         """Return the PyMuPDF parser configuration."""
@@ -320,6 +346,7 @@ class AdaParseConfig(
         """Return the text regression model configuration."""
         return TextRegressionConfig(
             alpha=self.alpha,
+            prediction_mode=self.prediction_mode,
             weights_path=self.weights_path,
             batch_size=self.batch_size,
             max_character_length=self.max_character_length,
@@ -333,67 +360,175 @@ class AdaParse(BaseParser):
 
     def __init__(self, config: AdaParseConfig) -> None:
         """Initialize the parser."""
-        # Initialize the PyMuPDF and Nougat parsers
+        # init PyMuPDF (HT) and Nougat (HQ) parsers
         self.pymupdf_parser = PyMuPDFParser(config=config.pymupdf_config)
         self.nougat_parser = NougatParser(config=config.nougat_config)
 
-        # Initialize the quality check classifier
-        # Return a 0 or 1 for each parsed text. If 0, the pdf text, as parsed
-        # by pymupdf is of high quality. If not 0, the pdf text should be
-        # parsed with Nougat.
+        # init the quality check classifier: 0 (PyMuPDF output probably of high quality), 1 (require reparse)
+        self.prediction_mode = config.prediction_mode
         self.classifier = NougatTextRegression(config=config.regression_config)
+
 
     @exception_handler(default_return=None)
     def parse(self, pdf_files: list[str]) -> list[dict[str, Any]] | None:
         """Parse a list of pdf files and return the parsed data."""
-        # First, parse the PDFs using PyMuPDF
+        # first, parse the PDFs using PyMuPDF
         with Timer('adaparse-pymupdf-parsing', self.unique_id):
-            documents = self.pymupdf_parser.parse(pdf_files)
+            documents = self.pymupdf_parser.parse(pdf_files) # by_doc: list[str]; by_page: list[list[str]]
 
         # If no documents, there was an error parsing the PDFs with PyMuPDF
         if documents is None:
             return None
 
+        #
+        print(f'len(documents) : {len(documents)}')
+
         # shallow copy
         docs_before_filter = list(documents)
 
-        # Apply the quality check regressor
+        # quality check regressor
         with Timer('adaparse-quality-check', self.unique_id):
-            document_text = [d['text'] for d in docs_before_filter]
-            qualities = self.classifier.predict(document_text)
+            # parse by prediction mode
+            if self.prediction_mode==PredMode.by_doc:
+                document_text = [doc['text'] for doc in docs_before_filter]
+            elif self.prediction_mode==PredMode.by_page:
+                document_page_texts = [doc['metadata']['page_text_list'] for doc in docs_before_filter]
+            else:
+                raise ValueError("prediction_mode only `by_doc' or `by_page`")
+
+            # qualitites: list[str] or list[list[str]]
+            if self.prediction_mode==PredMode.by_doc:
+                qualities = self.classifier.predict(document_text)
+                # DEBUG
+                qualities = [random.choice([0,1]) for _ in range(len(qualities))]
+            else:
+                # TODO: flatten out for efficiency, recombine?
+
+                # LEGACY (one line)
+                #qualities_list = [self.classifier.predict(page_texts) for page_texts in document_page_texts]
+
+                # New:
+                # record original lengths (empties ok)
+                lengths = [len(page_texts) for page_texts in document_page_texts]
+                # flatten input to SciBERT/Specter
+                flat_document_texts= list(chain.from_iterable(document_page_texts))
+                flat_qualities = self.classifier.predict(flat_document_texts)
+
+                # DBEUG: FAKE QUALITY SIGNALS
+                flat_qualities = [random.choice([0,1]) for _ in range(len(flat_qualities))]
+
+                # sanity check
+                if len(flat_qualities) != len(flat_document_texts):
+                    raise ValueError(f"Prediction length mismatch: got {len(flat_qualities)} for {len(flat_document_texts)} inputs")
+
+                # regroup into flat qualities into qualities_list:list[list[int]]
+                it = iter(flat_qualities)
+                qualities_list = [list(islice(it, n)) for n in lengths]
 
             # DEBUG
-            # print('qualities.size() : ', qualities.size())
+            if self.prediction_mode == PredMode.by_doc:
+                print('len(qualities) : ', len(qualities))
+                print('[DOC-MODE] qualities : {qualities}')
+            else:
+                print('lens(qualities_list) : ', [len(q) for q in qualities_list])
+                print('[PAGE-MODE] qualities_list : {qualities_list}')
 
-        # Log the percentage of low-quality documents
-        low_quality_num = sum(q != 0 for q in qualities)
-        low_quality_percentage = (low_quality_num / max(1, len(qualities))) * 100.0
+        # log the percentage of low-quality documents
+        if self.prediction_mode==PredMode.by_doc:
+            low_quality_num = sum(q != 0 for q in qualities)
+            low_quality_percentage = (low_quality_num / max(1, len(qualities))) * 100.0
+        else:
+            low_quality_num = 0.0
+            qualities_total_len = 0
+            for qs in qualities_list:
+                low_quality_num += sum(q != 0 for q in qs)
+                qualities_total_len += len(qs)
+            low_quality_percentage = (low_quality_num / max(1, qualities_total_len)) * 100.0
+
+        # status
         print(f'Low-quality documents: {low_quality_percentage:.2f}%')
 
-        # LEGACY
-        # Collect the documents that passed the quality check
-        # documents = [d for d, q in zip(documents, qualities) if q == 0]
+        # ensures alignment
+        if self.prediction_mode==PredMode.by_doc:
+            low_quality_pdf_paths = [d["path"] for d, q in zip(docs_before_filter, qualities) if q != 0]
+            flawless_documents = [d for d, q in zip(docs_before_filter, qualities) if q == 0]
+        else:
+            # pagewise
+            flawless_documents, repair_documents = [], [] # partition of doc dicts
+            low_quality_pdf_paths = []  # PDF paths
+            all_low_quality_pages = []  # list[list[int]]
+            all_high_quality_pages = [] # list[list[int]]
+            # loop docs
+            for doc, qualities in zip(docs_before_filter, qualities_list):
+                # every single page = good
+                if sum(qualities) == 0:
+                    flawless_documents.append(doc)
+                # at least one bad page
+                else:
+                    low_quality_pages, high_quality_pages = [], [] # list[int]
+                    low_quality_pdf_paths.append(doc["path"])
+                    # - loop pages: partition them
+                    for page_idx, q in enumerate(qualities):
+                        if q != 0:
+                            low_quality_pages.append(page_idx)
+                        else:
+                            high_quality_pages.append(page_idx)
+                    # append
+                    all_low_quality_pages.append(low_quality_pages)
+                    all_high_quality_pages.append(high_quality_pages)
+                    repair_documents.append(doc)
 
-        # Collect the pdf files that failed the quality check
-        # LEGACY
-        #low_quality_pdfs = [p for p, q in zip(pdf_files, qualities) if q != 0]
-        # NEW (ensures alignment)
-        low_quality_pdfs = [d["path"] for d, q in zip(docs_before_filter, qualities) if q != 0]
-        documents = [d for d, q in zip(docs_before_filter, qualities) if q == 0]
+        # no document to repair (re-parse)
+        if len(low_quality_pdf_paths) == 0:
+            return flawless_documents
 
-        # If no low-quality documents, return the parsed documents
-        if not low_quality_pdfs:
-            documents = [d for d, q in zip(docs_before_filter, qualities) if q == 0]
-            return documents
-
-        # Parse the low-quality documents using the Nougat parser
+        # parse the low-quality documents using the Nougat parser
         with Timer('adaparse-nougat-parsing', self.unique_id):
-            nougat_documents = self.nougat_parser.parse(low_quality_pdfs)
+            if self.prediction_mode==PredMode.by_doc:
+                nougat_documents = self.nougat_parser.parse(low_quality_pdf_paths)
+            else:
+                # List[Path], List[List[int]] (file path and to-be repaired PDFs)
+                pagewise_documents = self.nougat_parser.parse(low_quality_pdf_paths, all_low_quality_pages)
+
+                # non-empty output
+                if pagewise_documents is None:
+                    # pagewise_documents: List[{path: {page_idx: text}}]  ->  map[str, Dict[int, str]]
+                    page_map = {next(iter(d)): next(iter(d.values())) for d in pagewise_documents}
+
+                    # recombine
+                    repaired_documents = []
+                    for rep_doc in repair_documents:
+                        pdf_file_path = rep_doc['path']
+                        page_text_list = list(rep_doc['metadata']['page_text_list'])
+                        replacement = page_map.get(pdf_file_path, {})
+                        for page_idx, new_text in replacement.items():
+                            if 0 <= page_idx < len(page_text_list):
+                                page_text_list[page_idx] = str(new_text)
+                        # update document dic
+                        # - full text of doc
+                        rep_doc['text'] = "".join(page_text_list)
+                        # - page texts
+                        rep_doc['metadata']['page_text_list'] = page_text_list
+                        # - recomputes char indices of page breaks
+                        page_text_lens = [len(page_t) for page_t in page_text_list]
+                        rep_doc['metadata']['page_char_idx'] = np.concatenate([np.array([0]),
+                                                                            np.cumsum(page_text_lens[:-1])]).tolist()
+
+                        # append
+                        repaired_documents.append(rep_doc)
+
+                    # repaired (partially Nougat-parsed)
+                    nougat_documents = list(repaired_documents)
+                else:
+                    # Nougat returned nothing pagewise; warn and return empty (or fall back, if you prefer)
+                    print("Nougat pagewise parse returned no results; producing empty nougat_documents.")
+                    # raise warning that nougat went empty
+                    nougat_documents = []
 
         # If Nougat documents were parsed, add them to the output
         if nougat_documents is not None:
             print(f'Nougat parsed documents: {len(nougat_documents)}')
-            documents.extend(nougat_documents)
+            return flawless_documents + nougat_documents
 
         # Finally, return the parsed documents from both parsers
-        return documents
+        return flawless_documents

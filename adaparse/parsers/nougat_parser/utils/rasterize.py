@@ -40,6 +40,7 @@ def rasterize_paper(
     try:
         if isinstance(pdf, (str, Path)):
             pdf = pypdfium2.PdfDocument(pdf)
+        # entire document/all pages (default / by_doc / pages = None)
         if pages is None:
             pages = range(len(pdf))
         renderer = pdf.render(

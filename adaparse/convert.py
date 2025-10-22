@@ -264,12 +264,8 @@ if __name__ == '__main__':
     # Save the configuration to the output directory
     config.write_yaml(config.out_dir / 'config.yaml')
 
-    # If we have run before, find all previously parsed files
-    # else we use a empty set to check against
-    # NOTE: this function assumes the input file paths have not changed from
-    # run to run. If they have this method will fail and there will be
-    # duplicated parses. Similarly, if you switch from parsing zips to parsing
-    # pdfs it will fail.
+    # picks up after previously parsed files
+    # - function assumes the input file paths is unchanged
     if (config.out_dir / 'parsl').exists():
         already_parsed_files = parse_checkpoint(str(config.out_dir / 'parsl'))
     else:

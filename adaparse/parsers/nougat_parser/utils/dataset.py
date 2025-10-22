@@ -22,7 +22,6 @@ import pypdf
 import orjson
 from torch.utils.data import Dataset
 from transformers.modeling_utils import PreTrainedModel
-#from nougat.dataset.rasterize import rasterize_paper # lgeacy
 from adaparse.parsers.nougat_parser.utils.rasterize import rasterize_paper
 
 
@@ -84,7 +83,11 @@ class LazyDataset(Dataset):
         name (str): Name of the PDF document.
     """
 
-    def __init__(self, pdf, prepare: Callable, pages: Optional[List[int]] = None):
+    def __init__(self,
+                 pdf,
+                 prepare: Callable,
+                 pages: Optional[List[int]] = None):
+        """Init w/ page subsetting support"""
         super().__init__()
         self.prepare = prepare
         self.name = str(pdf)
@@ -98,8 +101,8 @@ class LazyDataset(Dataset):
     def __getitem__(self, i):
         if i == 0 or self.dataset is None:
             self.dataset = ImageDataset(self.init_fn(), self.prepare)
-        if i <= self.size and i >= 0:
-            return self.dataset[i], self.name if i == self.size - 1 else ""
+        if 0 <= i <= self.size:
+            return self.dataset[i], (self.name if i == self.size - 1 else "")
         else:
             raise IndexError
 

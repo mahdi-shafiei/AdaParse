@@ -17,8 +17,8 @@ __pycache__/
 ./models/
 
 # test legacy code/utils
-./tests/legacy/
-./tests_local/legacy/
+/tests/legacy/
+/tests_local
 
 # Distribution / packaging
 .Python

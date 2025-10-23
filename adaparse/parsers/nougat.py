@@ -55,6 +55,8 @@ class NougatParserConfig(BaseParserConfig):
     skipping: bool = True
     # The directory to write the logs to.
     nougat_logs_path: Path
+    # Minimum number of chars to be considered likely page
+    minimum_chars_per_page: int = 20
 
     @field_validator('mmd_out')
     @classmethod
@@ -324,28 +326,48 @@ class NougatParser(BaseParser):
             for j, page_output in enumerate(doc_output['predictions']):
                 # first page only
                 if page_num == 0:
+                    # list of page text `predictions`
                     predictions=[]
+                    # page processing attributes
+                    missing_pages_indices = []
+                    overly_short_page_indices = []
+                    filled_in_page_indices = []
+                    # parser name
                     doc_parser_name = 'nougat'
                     if pagewise_flag:
                         per_file_pages = {}
 
-                    # open file : fill missing pages
+                    # open file: fill missing pages
                     if self.config.fill_missing_pages and doc is None:
                         doc = safe_doc_open(datasets[file_index].name, self.logger)
 
                 # (optional) fill_missing_pages handling
-                page_likely_subpar = (('MISSING_PAGE' in page_output) or (len(page_output) < 20))
+                # - assess
+                page_has_missing_substring = 'MISSING_PAGE' in page_output
+                page_text_too_short = len(page_output) < self.config.minimum_chars_per_page
+                # - infer goodness of page text
+                page_likely_subpar = page_has_missing_substring or page_text_too_short
+                # - track reason
                 if self.config.fill_missing_pages and page_likely_subpar and (doc is not None):
+                    # open page text via extractor
                     if pagewise_flag:
                         original_idx = pages_lists[file_index][page_num]
                         fallback_text = '\n\n' + doc.load_page(original_idx).get_text() + '\n\n'
                     else:
                         fallback_text = '\n\n' + doc.load_page(page_num).get_text() + '\n\n'
                     new_len = len(fallback_text)
+
                     # heuristic: assign for more tokens
                     if new_len > len(page_output):
                         page_output = fallback_text
-                        doc_parser_name = 'nougat/pymupdf'
+                        doc_parser_name = 'pymupdf'
+                        filled_in_page_indices.append(page_num)
+
+                    # track reason
+                    if page_has_missing_substring:
+                        missing_pages_indices.append(page_num)
+                    else:
+                        overly_short_page_indices.append(page_text_too_short)
 
                 # - formatting (source-independent)
                 if self.config.markdown:
@@ -367,12 +389,18 @@ class NougatParser(BaseParser):
                         # process
                         joined_text, page_indices = build_doc_and_indices(predictions)
                         # - close doc
-                        if self.config.fill_missing_pages and (doc is not None):
+                        #if self.config.fill_missing_pages and (doc is not None):
+                        if doc is not None:
                             safe_doc_close(doc, self.logger)
                             doc = None
 
                         # metadata
-                        metadata = {'page_char_idx': page_indices}
+                        metadata = {
+                            'page_char_idx': page_indices,
+                            'page_with_missing_substring_idx' : missing_pages_indices,
+                            'page_that_are_short_idx' : overly_short_page_indices,
+                            'filled_in_page_idx' : filled_in_page_indices,
+                        }
 
                         # write document
                         document = {

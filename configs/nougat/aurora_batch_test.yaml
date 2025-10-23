@@ -10,7 +10,7 @@ chunk_size: 10
 parser_settings:
   name: "nougat"
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
-  batchsize: 50
+  batchsize: 40
   # Path to download the checkpoint to. if already exists, will use existing.
   checkpoint: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/checkpoint"
   # Set mmd_out to null if you don't want to write mmd files as a byproduct.

@@ -9,14 +9,31 @@ Moreover, it offers a workflow of various PDF parsing software that includes
 - traditional OCR: [Tesseract](https://github.com/tesseract-ocr/tesseract),
 - modern OCR (e.g., Vision Transformers): [Nougat](https://github.com/facebookresearch/nougat), and [Marker](https://github.com/VikParuchuri/marker)
 
+## Version 2 Updates
+- Full [Aurora](https://en.wikipedia.org/wiki/Aurora_(supercomputer))-support: all parsers have been ported and configs optimized
+- AdaParse can route a document's pages to different parsers (in prediction mode `by_page` via pagewise inference of text-quality)
+    - new prediction models to infer text quality from [pages](https://huggingface.co/7shoe/adaparse-specter-pagewise) and [documents](https://huggingface.co/7shoe/adaparse-specter-docwise)
+    - faster pre-processing pipeline (free of albumentations and cv2)
+- Nougat dependencies disentangled from the [source repo](https://github.com/facebookresearch/nougat/tree/main) to ensure continued support
+
+
 AdaParse designed to run on HPC systems and has parsed millions of (scientific) PDFs. It uses [Parsl](https://parsl-project.org/) to submit jobs to the
 scheduler. While AdaParse is agnostic to the specific system, instructions below are tailored to the [Polaris](https://www.alcf.anl.gov/polaris)
 supercomputer at Argonne National Laboratory (ANL). Regardless, AdaParse can run on any system (large or small) by adding an appropriate
 [Parsl configuration](https://parsl.readthedocs.io/en/stable/userguide/configuring.html).
 
-# News
-### AdaParse has been accepted to [MLSys 2025](https://mlsys.org/virtual/2025/poster/3229) 🎉
-### This work is presented a MLSys on May 13th, 2025; see you at Poster #3229 🥳
+## Citation
+#### AdaParse has been accepted to [MLSys 2025](https://mlsys.org/virtual/2025/poster/3229) 🎉
+#### This work has been presented at MLSys on May 13th, 2025 (Video)[https://mlsys.org/virtual/2025/poster/3229] 🎥
+The [MLSys Proceedings](https://proceedings.mlsys.org/) are not up to date. Here the ArXiV citation:
+```bibtex
+@inproceedings{siebenschuhadaparse,
+  title={AdaParse: An Adaptive Parallel PDF Parsing and Resource Scaling Engine},
+  author={Siebenschuh, Carlo and Hippe, Kyle and Gokdemir, Ozan and Brace, Alexander and Khan, Arham Mushtaq and Hossain, Khalid and Babuji, Yadu and Chia, Nicholas and Vishwanath, Venkatram and Ramanathan, Arvind and others},
+  booktitle={Eighth Conference on Machine Learning and Systems}
+}
+```
+
 
 # Installation
 ## Polaris
@@ -165,13 +182,4 @@ source venv/bin/activate
 pip install -U pip setuptools wheel
 pip install -e '.[dev,docs]'
 pre-commit install
-```
-
-## Citation
-```bibtex
-@inproceedings{siebenschuhadaparse,
-  title={AdaParse: An Adaptive Parallel PDF Parsing and Resource Scaling Engine},
-  author={Siebenschuh, Carlo and Hippe, Kyle and Gokdemir, Ozan and Brace, Alexander and Khan, Arham Mushtaq and Hossain, Khalid and Babuji, Yadu and Chia, Nicholas and Vishwanath, Venkatram and Ramanathan, Arvind and others},
-  booktitle={Eighth Conference on Machine Learning and Systems}
-}
 ```

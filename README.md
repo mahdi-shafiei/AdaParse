@@ -1,9 +1,10 @@
 # AdaParse
 <div align="center">
-  <img src="./assets/adaparse_logov2.png" alt="AdaParse logo" width="70%">
+  <img src="./assets/adaparse_logo.png" alt="AdaParse logo" width="70%">
 </div>
 
-AdaParse (**Ada**ptive Parallel **P**DF Parsing **a**nd **R**esource **S**caling **E**ngine) enable scalable high-accuracy PDF parsing. AdaParse is a data-driven strategy that assigns an appropriate parser to each document; offering high accuracy for any computaional budget.
+## AdaParse is part of the AuroraGPT Initiative
+AdaParse (**Ada**ptive Parallel **P**DF Parsing **a**nd **R**esource **S**caling **E**ngine) enable scalable high-accuracy PDF parsing. AdaParse is a data-driven strategy that assigns an appropriate parser to each document; offering high accuracy for any computaional budget. More details on [AuroraGPT](https://auroragpt.anl.gov/project-overview) and
 Moreover, it offers a workflow of various PDF parsing software that includes
 - extraction tools: [PyMuPDF](https://pymupdf.readthedocs.io/en/latest/), [pypdf](https://pypdf.readthedocs.io/en/stable/)
 - traditional OCR: [Tesseract](https://github.com/tesseract-ocr/tesseract),
@@ -13,9 +14,9 @@ Moreover, it offers a workflow of various PDF parsing software that includes
 - Full [Aurora](https://en.wikipedia.org/wiki/Aurora_(supercomputer))-support: all parsers have been ported and configs optimized
 - AdaParse can route a document's pages to different parsers (in prediction mode `by_page` via pagewise inference of text-quality)
     - new prediction models to infer text quality from [pages](https://huggingface.co/7shoe/adaparse-specter-pagewise) and [documents](https://huggingface.co/7shoe/adaparse-specter-docwise)
-    - faster pre-processing pipeline (free of albumentations and cv2)
+    - higher accuracy due to adaptive fill-in (*inception-parsing*)
+    - faster pre-processing pipeline (free of `albumentations` and `cv2`)
 - Nougat dependencies disentangled from the [source repo](https://github.com/facebookresearch/nougat/tree/main) to ensure continued support
-
 
 AdaParse designed to run on HPC systems and has parsed millions of (scientific) PDFs. It uses [Parsl](https://parsl-project.org/) to submit jobs to the
 scheduler. While AdaParse is agnostic to the specific system, instructions below are tailored to the [Polaris](https://www.alcf.anl.gov/polaris)

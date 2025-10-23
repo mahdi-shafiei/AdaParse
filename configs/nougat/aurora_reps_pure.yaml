@@ -1,29 +1,22 @@
 # The directory containing the pdfs to convert
-pdf_dir: <PROJECT_PATH>/input/small-pdf-dataset
+pdf_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/input/reps-pdf-dataset
 
 # The directory to place the converted pdfs in
-out_dir: <PROJECT_PATH>/output/adaparse
+out_dir: /lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/output/nougat_reps_pure
 
-# AdaParse *requires* PDFs as zipped input
-iszip: true
+# The number of PDFs to parse in each parsl task
+chunk_size: 10
 
-# The settings for the pdf parser
 parser_settings:
-  # The name of the parser to use
-  name: adaparse
-  # Max. proportion of high-quality parser (Nougat): throughput-sensitive
-  alpha: 0.15
-  # Prediction/delegation-granularity (either document-wise or page-wise)
-  prediction_mode: by_doc
-
+  name: "nougat"
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
-  batchsize: 5
+  batchsize: 20
   # Path to download the checkpoint to. if already exists, will use existing.
-  checkpoint: "<NOUGAT_CHECKPOINT>"
+  checkpoint: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/checkpoint"
   # Set mmd_out to null if you don't want to write mmd files as a byproduct.
-  mmd_out: "<NOUGAT_MMD_OUT>"
+  mmd_out: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/mmd_reps_pure"
   # If set to false, a will skip the pdfs that already have a parsed mmd file in mmd_out
-  recompute: false
+  recompute: true
   # If set to true, text of pages with "[MISSING...]" will be filled by PyMuPDF
   fill_missing_pages: false
   # Set to true if you want to use fp32 instead of bfloat16 (false is recommended)
@@ -33,33 +26,21 @@ parser_settings:
   # Preempt processing a paper if mode collapse causes repetitions (true is recommended)
   skipping: true
   # Path for the nougat-specific logs for the run.
-  nougat_logs_path: "<NOUGAT_LOGS>"
-
-  # The AdaParse classifier settings
-  # The HF identifier to regression model (formerly: 7shoe/adaparse-scibert-uncased) now auto by `prediction_mode`
-  weights_path: None
-  # The batch size for the classifier.
-  batch_size: 256
-  # The maximum length of the input text (in characters).
-  max_character_length: 3200
-  # The number of data workers for the classifier.
-  num_data_workers: 1
-  # Whether to pin memory for the classifier.
-  pin_memory: true
+  nougat_logs_path: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/logs_reps_pure"
 
 # The compute settings for the workflow
 compute_settings:
   # The name of the compute platform to use
-  name: <COMPUTE_NAME>
+  name: aurora
   # The number of compute nodes to use
   num_nodes: 1
   # Make sure to update the path to your conda environment and HF cache
-  worker_init: "<WORKER_INIT>"
+  worker_init: "source /home/siebenschuh/AdaParse/scripts/standup_aurora.sh"
   # The scheduler options to use when submitting jobs
-  scheduler_options: "<SCHEDULER_OPTIONS>"
+  scheduler_options: "#PBS -l filesystems=home:flare"
   # Make sure to change the account to the account you want to charge
-  account: <PROJECT_NAME>
+  account: FoundEpidem
   # The HPC queue to submit to
   queue: debug
   # The amount of time to request for your job
-  walltime: 00:15:00
+  walltime: 00:22:00

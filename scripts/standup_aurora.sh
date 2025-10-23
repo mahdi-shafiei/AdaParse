@@ -1,20 +1,14 @@
 # 1) framework + oneAPI (Aurora Python): good
 module purge
-module load frameworks/2025.0.0.lua
-source /opt/aurora/24.347.0/oneapi/setvars.sh --force 2>/dev/null || true
-# - sanitize
-#unset PYTHONPATH
-#export PYTHONNOUSERSITE=1
-#export PYTHONDONTWRITEBYTECODE=1
-#export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
+module load frameworks/2025.2.0.lua
+source /opt/aurora/25.190.0/oneapi/setvars.sh --force 2>/dev/null || true
 
 # 2) user site-packages append
-export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/2025.0.0/lib/python3.10/site-packages" # ERROR
-#export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/aurora_frameworks-2025.2.0/lib/python3.10/site-packages" # seems new
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$HOME/.local/aurora/frameworks/2025.2.0/lib/python3.10/site-packages"
 
 # 3) shims are visible first on PATH
 export PATH="$HOME/bin:$HOME/.local/bin:$PATH"
-export PATH="$HOME/.local/aurora/frameworks/2025.0.0/bin:$PATH"
+export PATH="$HOME/.local/aurora/frameworks/2025.2.0/bin:$PATH"
 
 # 4) HuggingFace
 export HF_HOME="${HF_HOME:-/lus/flare/projects/FoundEpidem/siebenschuh/HF}"
@@ -26,9 +20,6 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE-1}"
 
 # 6) conda environment (only daparse3 is built correctly)
 conda activate adaparse10
-# - sanitize
-unset PYTHONPATH
-export PYTHONNOUSERSITE=1
 
 # 7) parsl interchange shim once
 mkdir -p "$HOME/bin"

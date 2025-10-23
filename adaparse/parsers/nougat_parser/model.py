@@ -4,21 +4,19 @@ from __future__ import annotations
 import os
 os.environ.setdefault("ALBUMENTATIONS_DISABLE_VERSION_CHECK", "1")
 
-from pathlib import Path
-from typing import List, Optional, Union
-from collections import defaultdict
 import contextlib
 import logging
 import numpy as np
 import math
+from pathlib import Path
+from typing import List, Optional
+from collections import defaultdict
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms.functional import rotate, resize
-from PIL import Image
-from PIL import ImageOps
-import cv2
+from PIL import Image, ImageOps
 
 from transformers import GenerationConfig
 from transformers.modeling_utils import PreTrainedModel, PretrainedConfig
@@ -101,18 +99,13 @@ class SwinEncoder(nn.Module):
         print('In model.py ... ')
         print(f'name_or_path : {name_or_path}')
 
-        # DEBUG: block in `if False` maybe completely misguided
-        # - .bin contains both encoder and decoeder weights
-        # - torch.load deprecation warning
-        # - empty meta model
+        state_dict_flag = False
 
-        # default: name_or_path = None hence weights from Nougat checkpoint
-        # timm.create fairly broken doesn't work
-        # swin_state_dict = timm.create_model('timm/swin_base_patch4_window12_384_in22k', pretrained=True).state_dict()
-        if False:
+        if state_dict_flag:
             # DEBUG
+            swin_ckpt_pretrain = Path(name_or_path) / "swin_base_patch4_window12_384_22kto1k.pth"
 
-            if False:
+            if swin_ckpt_pretrain.is_dile():
                 print('Indeed, `name_or_path` is not None!')
                 # LEGACY: timm 0.5.4
                 # - - - - - - - - - -
@@ -120,9 +113,8 @@ class SwinEncoder(nn.Module):
                 #    "swin_base_patch4_window12_384", pretrained=True
                 #).state_dict()
 
-                # NEW: timm 1.0.19
-                # - - - - - - - - - -
-                swin_ckpt_pretrain = Path(name_or_path) / "swin_base_patch4_window12_384_22kto1k.pth"
+                # current: timm 1.0.19
+                # - - - - - - - - - - - - - -
                 if swin_ckpt_pretrain.is_file():
                     swin_state_dict = torch.load(swin_ckpt_pretrain, map_location="cpu")['model']
                     # DEBUG
@@ -133,13 +125,7 @@ class SwinEncoder(nn.Module):
             #
             new_swin_state_dict = self.model.state_dict()
 
-            # DEBUG
-            #print('\nnew_swin_state_dict.keys()')
-            #print(new_swin_state_dict.keys())
-            #print("\nswin_state_dict['model'].keys()")
-            #print(swin_state_dict['model'].keys())
-            # - - - - -
-
+            # init
             for x in new_swin_state_dict:
                 if x.endswith("relative_position_index") or x.endswith("attn_mask"):
                     pass
@@ -166,7 +152,7 @@ class SwinEncoder(nn.Module):
                     )
                 else:
                     print(f'key name. x={x}')
-                    new_swin_state_dict[x] = swin_state_dict[x]   # <- bug here
+                    new_swin_state_dict[x] = swin_state_dict[x]
             self.model.load_state_dict(new_swin_state_dict)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -181,19 +167,33 @@ class SwinEncoder(nn.Module):
 
     @staticmethod
     def crop_margin(img: Image.Image) -> Image.Image:
-        data = np.array(img.convert("L"))
-        data = data.astype(np.uint8)
-        max_val = data.max()
-        min_val = data.min()
-        if max_val == min_val:
-            return img
-        data = (data - min_val) / (max_val - min_val) * 255
-        gray = 255 * (data < 200).astype(np.uint8)
+        """Updated margin cropper w/o cv2-depencency"""
+        # grayscale → ndarray
+        data = np.asarray(img.convert("L"), dtype=np.uint8)
 
-        # Likely slow
-        coords = cv2.findNonZero(gray)  # Find all non-zero points (text)
-        a, b, w, h = cv2.boundingRect(coords)  # Find minimum spanning bounding box
-        return img.crop((a, b, w + a, h + b))
+        # normalize contrast like your original code
+        dmin, dmax = int(data.min()), int(data.max())
+        if dmax == dmin:  # completely flat image
+            return img
+        data = ((data.astype(np.float32) - dmin) / (dmax - dmin) * 255.0).astype(np.uint8)
+
+        # threshold: True = foreground (text/dark), mimics (data < 200)
+        mask = data < 200
+        if not mask.any():
+            return img
+
+        # find tight bounding box (rows/cols where any foreground exists)
+        # - formerly v2.findNonZero() & cv2.boundingRect()
+        rows = np.any(mask, axis=1)
+        cols = np.any(mask, axis=0)
+        y_idxs = np.where(rows)[0]
+        x_idxs = np.where(cols)[0]
+
+        # PIL crop is exclusive (+1)
+        top, bottom = int(y_idxs[0]), int(y_idxs[-1]) + 1
+        left, right = int(x_idxs[0]), int(x_idxs[-1]) + 1
+
+        return img.crop((left, top, right, bottom))
 
     @property
     def to_tensor(self):
@@ -304,7 +304,6 @@ class BARTDecoder(nn.Module):
             scale_embedding=True,
             add_final_layer_norm=True,
             d_model=int(hidden_dimension),
-            # NEW: carry through the configured dropouts for stability-equivalence
             dropout=dropout,
             attention_dropout=attention_dropout,
             activation_dropout=activation_dropout,
@@ -314,14 +313,11 @@ class BARTDecoder(nn.Module):
         ModelCls = MBartForConditionalGeneration if cond_gen else MBartForCausalLM
 
         # load weights from path (local, fine-tuned)
-        #self.model = ModelCls.from_pretrained(str(p), low_cpu_mem_usage=True)  # changed
-        #self.model = ModelCls(config=cfg, low_cpu_mem_usage=True) # new low_cpu_mem_usage unknown even under transformers 4.55.0
         self.model = ModelCls(config=cfg) # new
 
         if not cond_gen:
             self.model.config.is_encoder_decoder = True  # ensure X-attn flag still flipped
             self.model.prepare_inputs_for_generation = self.prepare_inputs_for_inference
-        #self.model.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id  # out now?
         self.model.model.decoder.embed_tokens.padding_idx = self.tokenizer.pad_token_id
 
 
@@ -656,12 +652,6 @@ class NougatModelInference(PreTrainedModel):
         if getattr(config, "generation_overrides", None):
             gen.update(config.generation_overrides)
         self._gen_cfg = gen
-
-        # -------- compile encoder only (safe win) --------
-        #try:
-        #    self.encoder = torch.compile(self.encoder, fullgraph=True, mode="reduce-overhead")
-        #except Exception:
-        #    pass
 
     @staticmethod
     def _make_sdpa_ctx(deterministic: bool):

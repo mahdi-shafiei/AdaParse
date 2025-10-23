@@ -124,7 +124,7 @@ class NougatParser(BaseParser):
             model = ipex.optimize(model, dtype=model.dtype)
 
         # DEBUG
-        self.logger.info(f'model                     : {model}')
+        #self.logger.info(f'model                     : {model}')
         self.logger.info(f'hasattr(torch, `xpu`)     : {hasattr(torch, "xpu")}')
         self.logger.info(f'torch.xpu.is_available()  : {torch.xpu.is_available()}')
         self.logger.info(f'use_ipex                  : {use_ipex}')
@@ -202,6 +202,10 @@ class NougatParser(BaseParser):
         # dataset
         datasets: List[LazyDataset] = []
         for pdf, pages in zip(pdfs, pages_lists):
+
+            # DEBUG
+            #print(f'\npages: {pages}')
+
             if not pdf.exists():
                 self.logger.warning(f'Could not find {pdf}. Skipping.')
                 continue
@@ -226,6 +230,9 @@ class NougatParser(BaseParser):
                 self.logger.info(f'Could not load file {pdf!s}.')
                 continue
             datasets.append(dataset)
+
+        # DEBUG: status dataset
+        #print(f'\n\n= = = = = = = = = = = = = = = = =\nlen(dataset) : {len(datasets)}')
 
         # If there are no PDFs to process, return None
         if len(datasets) == 0:

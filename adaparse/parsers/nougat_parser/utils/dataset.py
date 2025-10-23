@@ -93,7 +93,12 @@ class LazyDataset(Dataset):
         self.name = str(pdf)
         self.init_fn = partial(rasterize_paper, pdf, pages=pages)
         self.dataset = None
-        self.size = len(pypdf.PdfReader(pdf).pages) if pages is None else len(pages)
+        # page count of pdf
+        if pages is None:
+            with open(pdf, "rb") as fh:
+                self.size = len(pypdf.PdfReader(fh).pages)
+        else:
+            self.size = len(pages)
 
     def __len__(self):
         return self.size
@@ -231,7 +236,7 @@ class NougatDataset(Dataset):
         self.max_length = max_length
         self.split = split
         self.perturb = "NOUGAT_PERTURB" in os.environ and os.environ["NOUGAT_PERTURB"]
-        # TODO improve naming conventions
+
         template = "%s"
         self.dataset = SciPDFDataset(
             dataset_path, split=self.split, template=template, root_name=root_name

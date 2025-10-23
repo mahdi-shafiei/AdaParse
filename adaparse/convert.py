@@ -240,14 +240,19 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # DEBUG FOXTROT
-    print('\n\n\n---------\nIN MAIN()\n---------')
-    import transformers
-    import parsl
-    print('sys.version : ', sys.version)
-    print('transformers.__version__ : ', transformers.__version__)
-    print('parsl.__version__ : ', parsl.__version__)
-    import adaparse
-    print('adaparse import worked!')
+    debug_flag = True
+    if debug_flag:
+        print('\n\n\n---------\nDEBUG()\n---------')
+        import transformers
+        import parsl
+        import torch # debug
+        print('sys.version : ', sys.version)
+        print('transformers.__version__ : ', transformers.__version__)
+        print('parsl.__version__ : ', parsl.__version__)
+        print('torch.__version__ : ', torch.__version__)
+        print('torch.xpu.is_available() : ', torch.xpu.is_available())
+        import adaparse
+        print('adaparse import worked!')
 
     # Load workflow configuration
     config = WorkflowConfig.from_yaml(args.config)
@@ -292,9 +297,7 @@ if __name__ == '__main__':
     # Log the input files
     logger.info(f'Found {len(files)} {file_ext} files to parse')
 
-    # Batch the input args
-    # Zip files have many PDFs, so we process them in a single batch,
-    # while individual PDFs are batched in chunks to maintain higher throughput
+    # Batch the input args: each zip should contain many PDFs
     batched_files = (
         files if config.iszip else batch_data(files, config.chunk_size)
     )

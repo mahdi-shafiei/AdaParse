@@ -17,13 +17,13 @@ parser_settings:
   prediction_mode: by_doc
 
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
-  batchsize: 5
+  batchsize: 10
   # Path to download the checkpoint to. if already exists, will use existing.
   checkpoint: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/checkpoint"
   # Set mmd_out to null if you don't want to write mmd files as a byproduct.
   mmd_out: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/mmd1"
   # If set to false, a will skip the pdfs that already have a parsed mmd file in mmd_out
-  recompute: false
+  recompute: true
   # If set to true, text of pages with "[MISSING...]" will be filled by PyMuPDF
   fill_missing_pages: false
   # Set to true if you want to use fp32 instead of bfloat16 (false is recommended)
@@ -35,12 +35,13 @@ parser_settings:
   # Path for the nougat-specific logs for the run.
   nougat_logs_path: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/logs"
 
-  # The AdaParse classifier settings
-  # The HF identifier or path to the fine-tuned regression model
-  weights_path: 7shoe/adaparse-scibert-uncased #7shoe/adaparse-specter-docwise
+  # Directory of HF checkpoint dirs
+  prediction_model_dir: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/prediction"
+  # The HF identifier (if None, inferred by `prediction_mode`)
+  prediction_model_name: None
   # The batch size for the classifier.
-  batch_size: 24 #256
-  # The maximum length of the input text (in characters).
+  batch_size: 256
+  # The maximum length of the input text (in characters) per page/doc.
   max_character_length: 3200
   # The number of data workers for the classifier.
   num_data_workers: 1

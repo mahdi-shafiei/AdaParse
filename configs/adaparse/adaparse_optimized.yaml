@@ -16,10 +16,12 @@ parser_settings:
   name: adaparse
   # Max. proportion of high-quality parser (Nougat): throughput-sensitive
   alpha: 0.05
+  # Prediction/delegation-granularity (either document-wise or page-wise)
+  prediction_mode: by_doc
 
   # The Nougat parser settings
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
-  batchsize: 10
+  batchsize: 20
   # Path to download the checkpoint to. if already exists, will use existing.
   checkpoint: /eagle/projects/argonne_tpc/siebenschuh/nougat-checkpoint
   # Set mmd_out to null if you don't want to write mmd files as a byproduct.
@@ -35,9 +37,10 @@ parser_settings:
   # Path for the nougat-specific logs for the run.
   nougat_logs_path: /eagle/projects/argonne_tpc/siebenschuh/aurora_gpt/output/adaparse/nougat_logs
 
-  # The AdaParse classifier settings
-  # The HF identifier or path to the fine-tuned regression model
-  weights_path: 7shoe/adaparse-scibert-uncased
+  # AdaParse Regression
+  prediction_model_dir: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/prediction"
+  # The HF identifier (if None, inferred by `prediction_mode`)
+  prediction_model_name: None
   # The batch size for the classifier.
   batch_size: 256
   # The maximum length of the input text (in characters).

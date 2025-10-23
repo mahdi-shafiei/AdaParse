@@ -14,8 +14,7 @@ import random
 import numpy as np
 import torch
 from enum import Enum
-from pydantic import BaseModel
-from pydantic import Field
+from pydantic import BaseModel, Field, ConfigDict, field_validator, field_serializer
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
@@ -52,6 +51,7 @@ class TextDataset(Dataset):
         """Return a sequence."""
         return self.texts[idx]
 
+
 class TextRegressionConfig(BaseModel):
     """Settings for the text quality regression."""
 
@@ -62,10 +62,16 @@ class TextRegressionConfig(BaseModel):
         default=PredMode.by_doc,
         description='Mode/granularity with which prediction/delegation occurs.',
     )
-    weights_path: Path | None = Field(
+    #weights_path: Path | None = Field(
+    #    default=None,
+    #    description='The path to the fine-tuned model weights - overwrites pred granularity.',
+    prediction_model_dir: Path = Field(
         default=None,
-        description='The path to the fine-tuned model weights - overwrites pred granularity.',
-
+        description="Directory containing owner__repo subfolders with HF snapshots.",
+    )
+    prediction_model_name: Optional[str] = Field(
+        default=None,
+        description="HF identifier of one of the 3 predictio models; if None, inferred from prediction_mode.",
     )
     batch_size: int = Field(
         default=8,
@@ -83,37 +89,104 @@ class TextRegressionConfig(BaseModel):
         default=True,
         description='Whether to pin memory for the regression model.',
     )
+    @property
+    def resolved_repo_id(self) -> str:
+        if self.prediction_model_name:  # explicit override
+            return self.prediction_model_name
+        # infer correct regression model from prediction mode
+        if self.prediction_mode == PredMode.by_doc:
+            return "7shoe/adaparse-specter-docwise"
+        elif self.prediction_mode == PredMode.by_page:
+            return "7shoe/adaparse-specter-pagewise"
+        raise ValueError("prediction_mode must be PredMode.by_doc or PredMode.by_page")
 
+    @staticmethod
+    def _subdir_from_repo_id(repo_id: str) -> str:
+        return repo_id.replace("/", "__")
+
+    @property
+    def snapshot_dir(self) -> Path:
+        return (self.prediction_model_dir / self._subdir_from_repo_id(self.resolved_repo_id)).resolve()
+
+    def _validate_mode_vs_name(self):
+        # If user overrides name, ensure it matches mode to avoid silent mixups
+        if self.prediction_model_name:
+            if self.prediction_mode == PredMode.by_doc and "docwise" not in self.prediction_model_name:
+                raise ValueError("PredMode.by_doc requires a '*-docwise' model.")
+            if self.prediction_mode == PredMode.by_page and "pagewise" not in self.prediction_model_name:
+                raise ValueError("PredMode.by_page requires a '*-pagewise' model.")
+        return self
+
+def _infer_repo_id(prediction_mode, override_name: str | None) -> str:
+    # Normalize “None”/“null” strings to real None
+    if isinstance(override_name, str) and override_name.strip().lower() in {"", "none", "null"}:
+        override_name = None
+
+    if override_name is not None:
+        return override_name
+
+    # Infer from mode
+    if prediction_mode == PredMode.by_doc:
+        return "7shoe/adaparse-specter-docwise"
+    elif prediction_mode == PredMode.by_page:
+        return "7shoe/adaparse-specter-pagewise"
+    else:
+        raise ValueError("prediction_mode must be by_doc or by_page")
+
+def _subdir_from_repo_id(repo_id: str) -> str:
+    return repo_id.replace("/", "__")
+
+def _validate_snapshot_dir(d: Path) -> None:
+    if not d.exists():
+        raise FileNotFoundError(f"Prediction snapshot directory not found: {d}")
+    cfg_ok = (d / "config.json").exists()
+    weights_ok = any((d / f).exists() for f in ("model.safetensors", "pytorch_model.bin", "onnx/model.onnx"))
+    tok_ok = any((d / f).exists() for f in ("tokenizer.json", "vocab.txt", "spiece.model", "sentencepiece.bpe.model"))
+    if not (cfg_ok and weights_ok and tok_ok):
+        raise FileNotFoundError(
+            f"Incomplete snapshot in {d}. Need: config.json + (model.safetensors|pytorch_model.bin|onnx/model.onnx) + tokenizer"
+        )
+
+class _Cfg(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @staticmethod
+    def _noneify(v):
+        if isinstance(v, str) and v.strip().lower() in {"", "none", "null"}:
+            return None
+        return v
 
 class TextRegression(ABC):
     """Text Quality Regression Model."""
 
     def __init__(self, config: TextRegressionConfig) -> None:
-        """Initialize the regression model via CLS."""
+        """
+        Initialize the regression model via CLS.
+        AdaParse v1 : 7shoe/adaparse-scibert-uncased (only doc-wise)
+        AdaParse v2 : 7shoe/adaparse-specter-{docwise,pagewise}
+
+        Note:
+            num_labels=6 is universal for both AdaParse versions (one per ref. parser)
+        """
         from transformers import AutoModelForSequenceClassification
         from transformers import AutoTokenizer
 
-        # prediction model
-        if config.prediction_mode == PredMode.by_doc:
-            regr_model_name = '7shoe/adaparse-scibert-uncased' # 7shoe/adaparse-specter-docwise
-        elif config.prediction_mode == PredMode.by_page:
-            regr_model_name = '7shoe/adaparse-scibert-uncased' # 7shoe/adaparse-specter-pagewise
-        else:
-            raise ValueError("Prediction mode is either `by_doc` or `by_page`")
+        # resolve name
+        repo_id = _infer_repo_id(config.prediction_mode, getattr(config, "prediction_model_name", None))
 
-        # weights path set
-        if config.weights_path is not None:
-            regr_model_name = config.weights_path
-            print(f"weights_path set: Overwrite `prediction_mode` and use model: {regr_model_name}")
+        # init & validate checkpoint directory
+        root = Path(config.prediction_model_dir).expanduser().resolve()
+        snap = root / _subdir_from_repo_id(repo_id)
+        _validate_snapshot_dir(snap)
 
-        # Load the tokenizer
+        # load the tokenizer (local only)
         tokenizer = AutoTokenizer.from_pretrained(
-            regr_model_name
+            snap, local_files_only=True
         )
 
-        # Load the base model
+        # load the base model (local only)
         model = AutoModelForSequenceClassification.from_pretrained(
-            regr_model_name, num_labels=6
+            snap, local_files_only=True, num_labels=6
         )
 
         # model to device
@@ -347,7 +420,8 @@ class AdaParseConfig(
         return TextRegressionConfig(
             alpha=self.alpha,
             prediction_mode=self.prediction_mode,
-            weights_path=self.weights_path,
+            prediction_model_dir=self.prediction_model_dir,
+            prediction_model_name=self.prediction_model_name,
             batch_size=self.batch_size,
             max_character_length=self.max_character_length,
             num_data_workers=self.num_data_workers,
@@ -380,8 +454,9 @@ class AdaParse(BaseParser):
         if documents is None:
             return None
 
-        #
-        print(f'len(documents) : {len(documents)}')
+        # DEBUG
+        #print(f'self.prediction_mode : {self.prediction_mode}')
+        #print(f'len(documents) : {len(documents)}')
 
         # shallow copy
         docs_before_filter = list(documents)
@@ -399,8 +474,8 @@ class AdaParse(BaseParser):
             # qualitites: list[str] or list[list[str]]
             if self.prediction_mode==PredMode.by_doc:
                 qualities = self.classifier.predict(document_text)
-                # DEBUG
-                qualities = [random.choice([0,1]) for _ in range(len(qualities))]
+                # TESTING ONLY: randomize assignments
+                # qualities = [random.choice([0,1]) for _ in range(len(qualities))]
             else:
                 # TODO: flatten out for efficiency, recombine?
 
@@ -411,11 +486,11 @@ class AdaParse(BaseParser):
                 # record original lengths (empties ok)
                 lengths = [len(page_texts) for page_texts in document_page_texts]
                 # flatten input to SciBERT/Specter
-                flat_document_texts= list(chain.from_iterable(document_page_texts))
+                flat_document_texts = list(chain.from_iterable(document_page_texts))
                 flat_qualities = self.classifier.predict(flat_document_texts)
 
-                # DBEUG: FAKE QUALITY SIGNALS
-                flat_qualities = [random.choice([0,1]) for _ in range(len(flat_qualities))]
+                # TESTING ONLY: randomize assignments
+                #flat_qualities = [random.choice([0,1]) for _ in range(len(flat_qualities))]
 
                 # sanity check
                 if len(flat_qualities) != len(flat_document_texts):
@@ -426,12 +501,12 @@ class AdaParse(BaseParser):
                 qualities_list = [list(islice(it, n)) for n in lengths]
 
             # DEBUG
-            if self.prediction_mode == PredMode.by_doc:
-                print('len(qualities) : ', len(qualities))
-                print('[DOC-MODE] qualities : {qualities}')
-            else:
-                print('lens(qualities_list) : ', [len(q) for q in qualities_list])
-                print('[PAGE-MODE] qualities_list : {qualities_list}')
+            #if self.prediction_mode == PredMode.by_doc:
+            #    print('len(qualities) : ', len(qualities))
+            #    print('[DOC-MODE] qualities : {qualities}')
+            #else:
+            #    print('lens(qualities_list) : ', [len(q) for q in qualities_list])
+            #    print('[PAGE-MODE] qualities_list : {qualities_list}')
 
         # log the percentage of low-quality documents
         if self.prediction_mode==PredMode.by_doc:
@@ -488,10 +563,18 @@ class AdaParse(BaseParser):
                 nougat_documents = self.nougat_parser.parse(low_quality_pdf_paths)
             else:
                 # List[Path], List[List[int]] (file path and to-be repaired PDFs)
+                # DEBUG
+                #print('\n\n . . . Before self.nougat_parser.parse(low_quality_pdf_paths, all_low_quality_pages)')
+                #print(f'len(low_quality_pdf_paths) : {len(low_quality_pdf_paths)}')
+                #print(f'len(all_low_quality_pages) : {len(all_low_quality_pages)}')
+
                 pagewise_documents = self.nougat_parser.parse(low_quality_pdf_paths, all_low_quality_pages)
 
+                # DEBUG
+                #print(f'len(pagewise_documents) : {pagewise_documents}')
+
                 # non-empty output
-                if pagewise_documents is None:
+                if pagewise_documents is not None:
                     # pagewise_documents: List[{path: {page_idx: text}}]  ->  map[str, Dict[int, str]]
                     page_map = {next(iter(d)): next(iter(d.values())) for d in pagewise_documents}
 

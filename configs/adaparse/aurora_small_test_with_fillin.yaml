@@ -35,11 +35,12 @@ parser_settings:
   # Path for the nougat-specific logs for the run.
   nougat_logs_path: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/meta/nougat/logs"
 
-  # The AdaParse classifier settings
-  # The HF identifier or path to the fine-tuned regression model
-  weights_path: 7shoe/adaparse-scibert-uncased #7shoe/adaparse-specter-docwise
+  # AdaParse Regression
+  prediction_model_dir: "/lus/flare/projects/FoundEpidem/siebenschuh/adaparse_data/prediction"
+  # The HF identifier (if None, inferred by `prediction_mode`)
+  prediction_model_name: None
   # The batch size for the classifier.
-  batch_size: 24 #256
+  batch_size: 256
   # The maximum length of the input text (in characters).
   max_character_length: 3200
   # The number of data workers for the classifier.

@@ -26,7 +26,6 @@ P = ParamSpec('P')
 
 PathLike = Union[str, Path]
 
-
 class BaseModel(_BaseModel):
     """An interface to add JSON/YAML serialization to Pydantic models."""
 

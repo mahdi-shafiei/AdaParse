@@ -13,6 +13,8 @@ parser_settings:
   name: adaparse
   # Max. proportion of high-quality parser (Nougat): throughput-sensitive
   alpha: 0.05
+  # Prediction/delegation-granularity (either document-wise or page-wise)
+  prediction_mode: by_doc
 
   # Recommended batch size of pages (not pdfs) is 10, maximum that fits into A100 40GB.
   batchsize: 5

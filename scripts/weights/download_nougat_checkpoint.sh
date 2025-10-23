@@ -10,7 +10,7 @@
 #   HUGGINGFACE_TOKEN  (optional; inherited by CLI if set)
 #
 # Notes:
-# - Avoids ~/.local/bin/hf (which on your box points to a broken interpreter).
+# - Avoids ~/.local/bin/hf.
 # - Prefers 'huggingface-cli'; falls back to 'python -m huggingface_hub.cli.hf'.
 # - Forces ONLINE just for this command; resumes partial downloads.
 # - Uses a per-target local cache to reduce lock chatter.

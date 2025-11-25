@@ -11,3 +11,5 @@ scikit-learn>=1.5.0
 datasets>=3.0.0
 parsl==2025.3.10
 #accelerate==0.34.2 # causes condlicts
+rapidfuzz
+nltk

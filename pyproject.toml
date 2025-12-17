@@ -38,7 +38,9 @@ dependencies = [
     "pypdf>=4.2.0",
     "pytesseract>=0.3.13",
     "orjson>=3.11",
-    "pypdfium2==4.30.0"
+    "pypdfium2==4.30.0",
+    "rapidfuzz",
+    "nltk"
 ]
 
 [project.urls]
